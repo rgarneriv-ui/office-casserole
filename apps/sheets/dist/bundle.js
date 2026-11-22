@@ -415,6 +415,19 @@
   }
 
   // engines/spreadsheet-calc/src/engine.ts
+  function formatNumber(v, fmt) {
+    const grouped = (n, dec) => n.toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+    switch (fmt) {
+      case "number2":
+        return grouped(v, 2);
+      case "currency":
+        return v < 0 ? `-$${grouped(-v, 2)}` : `$${grouped(v, 2)}`;
+      case "percent":
+        return `${grouped(v * 100, 2)}%`;
+      default:
+        return Number.isInteger(v) ? String(v) : String(Math.round(v * 1e10) / 1e10);
+    }
+  }
   function collectRefs(ast, out) {
     switch (ast.t) {
       case "ref":
@@ -474,18 +487,44 @@
       if (isError(v)) return v.code;
       if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
       if (typeof v === "number") {
-        if (Number.isInteger(v)) return String(v);
-        return String(Math.round(v * 1e10) / 1e10);
+        return formatNumber(v, this.getFormat(ref).numFmt ?? "general");
       }
       return v;
     }
-    /** All non-empty cells, for persistence. */
+    getFormat(ref) {
+      const key = typeof ref === "string" ? this.keyOf(ref) : addrKey(ref);
+      if (key === null) return {};
+      return { ...this.cells.get(key)?.format ?? {} };
+    }
+    /** Merge a format patch into the cell; null values clear keys. Formats are
+     *  display-only: values and the dependency graph are untouched. */
+    setFormat(ref, patch) {
+      const key = typeof ref === "string" ? this.keyOf(ref) : addrKey(ref);
+      if (key === null) throw new Error(`Invalid cell reference ${String(ref)}`);
+      const cell = this.ensure(key);
+      const next = { ...cell.format ?? {} };
+      for (const [k, v] of Object.entries(patch)) {
+        if (v === null || v === void 0 || v === false || v === "general") {
+          delete next[k];
+        } else {
+          next[k] = v;
+        }
+      }
+      if (Object.keys(next).length === 0) delete cell.format;
+      else cell.format = next;
+    }
+    /** All non-empty cells (input or format), for persistence. */
     entries() {
       const out = [];
       for (const [key, cell] of this.cells) {
-        if (cell.input !== "") {
+        if (cell.input !== "" || cell.format) {
           const [col, row] = key.split(":").map(Number);
-          out.push({ addr: formatAddr({ col, row }), input: cell.input });
+          const entry = {
+            addr: formatAddr({ col, row }),
+            input: cell.input
+          };
+          if (cell.format) entry.format = { ...cell.format };
+          out.push(entry);
         }
       }
       return out;
@@ -852,23 +891,43 @@
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>`;
   var XLSX_WORKBOOK_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
+  var NUM_FMT_CODES = {
+    number2: { id: 164, code: "#,##0.00" },
+    currency: { id: 165, code: "&quot;$&quot;#,##0.00" },
+    percent: { id: 166, code: "0.00%" }
+  };
+  var XF_NUMFMTS = ["general", "number2", "currency", "percent"];
+  function styleIndexFor(format) {
+    if (!format || !format.bold && !format.numFmt) return 0;
+    const fontBit = format.bold ? 1 : 0;
+    const nf = XF_NUMFMTS.indexOf(format.numFmt ?? "general");
+    return 1 + fontBit * 4 + Math.max(0, nf);
+  }
   var XLSX_STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="3">` + Object.values(NUM_FMT_CODES).map((f) => `<numFmt numFmtId="${f.id}" formatCode="${f.code}"/>`).join("") + `</numFmts><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="9"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>` + [0, 1].map(
+    (fontId) => XF_NUMFMTS.map((nf) => {
+      const numFmtId = nf === "general" ? 0 : NUM_FMT_CODES[nf].id;
+      return `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="0" borderId="0" xfId="0" applyFont="${fontId}" applyNumberFormat="${numFmtId ? 1 : 0}"/>`;
+    }).join("")
+  ).join("") + `</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
   function cellXml(addr, input, sheet2) {
     const value = sheet2.getCell(addr);
+    const si = styleIndexFor(sheet2.getFormat(addr));
+    const sAttr = si > 0 ? ` s="${si}"` : "";
     if (input.startsWith("=")) {
       const f = `<f>${xmlEscape(input.slice(1))}</f>`;
-      if (isError(value)) return `<c r="${addr}" t="e">${f}<v>${value.code}</v></c>`;
-      if (typeof value === "number") return `<c r="${addr}">${f}<v>${value}</v></c>`;
-      if (typeof value === "boolean") return `<c r="${addr}" t="b">${f}<v>${value ? 1 : 0}</v></c>`;
+      if (isError(value)) return `<c r="${addr}"${sAttr} t="e">${f}<v>${value.code}</v></c>`;
+      if (typeof value === "number") return `<c r="${addr}"${sAttr}>${f}<v>${value}</v></c>`;
+      if (typeof value === "boolean") return `<c r="${addr}"${sAttr} t="b">${f}<v>${value ? 1 : 0}</v></c>`;
       if (typeof value === "string")
-        return `<c r="${addr}" t="str">${f}<v>${xmlEscape(value)}</v></c>`;
-      return `<c r="${addr}">${f}</c>`;
+        return `<c r="${addr}"${sAttr} t="str">${f}<v>${xmlEscape(value)}</v></c>`;
+      return `<c r="${addr}"${sAttr}>${f}</c>`;
     }
-    if (typeof value === "number") return `<c r="${addr}"><v>${value}</v></c>`;
-    if (typeof value === "boolean") return `<c r="${addr}" t="b"><v>${value ? 1 : 0}</v></c>`;
+    if (typeof value === "number") return `<c r="${addr}"${sAttr}><v>${value}</v></c>`;
+    if (typeof value === "boolean") return `<c r="${addr}"${sAttr} t="b"><v>${value ? 1 : 0}</v></c>`;
     if (typeof value === "string")
-      return `<c r="${addr}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value)}</t></is></c>`;
+      return `<c r="${addr}"${sAttr} t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value)}</t></is></c>`;
+    if (si > 0) return `<c r="${addr}" s="${si}"/>`;
     return null;
   }
   async function exportXlsx(sheet2) {
@@ -1051,7 +1110,10 @@
       if (!raw) return seed();
       const entries = JSON.parse(raw);
       if (entries.length === 0) return seed();
-      for (const { addr, input } of entries) sheet.setCell(addr, input);
+      for (const e of entries) {
+        sheet.setCell(e.addr, e.input);
+        if (e.format) sheet.setFormat(e.addr, e.format);
+      }
       statusEl.textContent = "Restored sheet";
     } catch {
       seed();
@@ -1075,6 +1137,12 @@
     sheet.setCell("D7", "=ROUND(AVERAGE(D2:D4), 2)");
     sheet.setCell("A8", "Over budget?");
     sheet.setCell("D8", '=IF(D6>300, "YES", "no")');
+    for (const a of ["C2", "C3", "C4", "D2", "D3", "D4", "D6", "D7"]) {
+      sheet.setFormat(a, { numFmt: "currency" });
+    }
+    for (const a of ["A1", "B1", "C1", "D1", "A6", "A7", "A8"]) {
+      sheet.setFormat(a, { bold: true });
+    }
   }
   function buildGrid() {
     const head = ["<tr><th></th>"];
@@ -1094,14 +1162,45 @@
     gridEl.querySelectorAll("td[data-addr]").forEach((td) => {
       const addr = td.dataset.addr;
       const value = sheet.getCell(addr);
+      const fmt = sheet.getFormat(addr);
       td.textContent = sheet.getDisplay(addr);
       td.classList.toggle("error", isError(value));
       td.classList.toggle("num", typeof value === "number");
       td.classList.toggle("selected", addr === selected);
+      td.classList.toggle("bold", fmt.bold === true);
+      td.style.textAlign = fmt.align ?? "";
     });
     addrEl.textContent = selected;
     if (!editing) formulaEl.value = sheet.getInput(selected);
+    syncFormatToolbar();
   }
+  function syncFormatToolbar() {
+    const fmt = sheet.getFormat(selected);
+    document.getElementById("btn-bold")?.classList.toggle("active", fmt.bold === true);
+    const numSel = document.getElementById("fmt-num");
+    if (numSel) numSel.value = fmt.numFmt ?? "general";
+    const alignSel = document.getElementById("fmt-align");
+    if (alignSel) alignSel.value = fmt.align ?? "auto";
+  }
+  document.getElementById("btn-bold")?.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    sheet.setFormat(selected, { bold: sheet.getFormat(selected).bold ? null : true });
+    refreshValues();
+    scheduleSave();
+  });
+  document.getElementById("fmt-num")?.addEventListener("change", (e) => {
+    sheet.setFormat(selected, { numFmt: e.target.value });
+    refreshValues();
+    scheduleSave();
+    formulaEl.focus();
+  });
+  document.getElementById("fmt-align")?.addEventListener("change", (e) => {
+    const v = e.target.value;
+    sheet.setFormat(selected, { align: v === "auto" ? null : v });
+    refreshValues();
+    scheduleSave();
+    formulaEl.focus();
+  });
   function select(addr) {
     selected = addr;
     editing = false;

@@ -152,5 +152,67 @@
     "knownLimitations": [
       "Single sheet; no formatting/styles; no real-Excel corpus yet"
     ]
+  },
+  {
+    "id": "SHEETS-FMT-001",
+    "application": "casserole-sheets",
+    "name": "Cell formatting (bold, alignment, number formats)",
+    "priority": "P1",
+    "description": "Per-cell display formats — bold, left/center/right alignment, Number/Currency/Percent — applied from the toolbar, persisted with the sheet, rendered in the grid and CSV display values, and exported as real XLSX styles (numFmts + fonts + cellXfs). Values and the dependency graph are untouched by formatting.",
+    "baseline": {
+      "product": "Microsoft Excel",
+      "capability": "Basic cell formatting",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
+    "owner": "engines/spreadsheet-calc + apps/sheets",
+    "dependencies": [
+      "SHEETS-CALC-001"
+    ],
+    "commands": [
+      "format.bold",
+      "format.align",
+      "format.number"
+    ],
+    "offlineSupport": "fully offline",
+    "edgeCases": [
+      "format-only cells persist and export",
+      "clearing to general removes stored format",
+      "formulas format their computed values"
+    ],
+    "acceptance": [
+      "Display formats never change computed values",
+      "entries() round-trips formats including format-only cells",
+      "openpyxl reads exported bold and number formats back"
+    ],
+    "verification": {
+      "required": [
+        "unit",
+        "end-to-end",
+        "compatibility"
+      ]
+    },
+    "status": "tested",
+    "evidence": [
+      {
+        "kind": "test-run",
+        "ref": "calc format suites + xlsx style suite: pass (120 unit total)",
+        "date": "2026-11-22"
+      },
+      {
+        "kind": "report",
+        "ref": "openpyxl cross-validation: bold + numFmts read back",
+        "date": "2026-11-22"
+      },
+      {
+        "kind": "test-run",
+        "ref": "smoke-sheets.mjs format scenario: pass",
+        "date": "2026-11-22"
+      }
+    ],
+    "knownLimitations": [
+      "XLSX import does not read formats yet (reported as XLSX-IMPORT-STYLES)",
+      "No fills, borders, fonts, or column widths yet"
+    ]
   }
 ]

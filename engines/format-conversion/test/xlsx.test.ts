@@ -110,3 +110,25 @@ test("xlsx: non-xlsx input fails loudly", async () => {
   const bytes = await zipWrite([{ name: "word/document.xml", data: new TextEncoder().encode("<x/>") }]);
   await assert.rejects(() => importXlsx(bytes, parseXml), /workbook\.xml missing/);
 });
+
+test("xlsx: cell formats export as real styles (s attrs + styleSheet)", async () => {
+  const s = new Sheet();
+  s.setCell("A1", "Total");
+  s.setFormat("A1", { bold: true });
+  s.setCell("B1", "1234.5");
+  s.setFormat("B1", { numFmt: "currency", bold: true });
+  s.setCell("C1", "0.125");
+  s.setFormat("C1", { numFmt: "percent" });
+  const { bytes } = await exportXlsx(s);
+  const entries = await zipRead(bytes);
+  const styles = new TextDecoder().decode(entries.find((e) => e.name === "xl/styles.xml")!.data);
+  assert.ok(styles.includes('formatCode="0.00%"'));
+  assert.ok(styles.includes("<b/>"), "bold font present");
+  const ws = new TextDecoder().decode(entries.find((e) => e.name === "xl/worksheets/sheet1.xml")!.data);
+  assert.ok(/<c r="A1" s="\d+" t="inlineStr">/.test(ws), "bold text cell carries a style");
+  assert.ok(/<c r="B1" s="\d+">/.test(ws), "currency cell carries a style");
+  // importing our styled export keeps the data and reports the dropped styles
+  const { sheet, report } = await importXlsx(bytes, parseXml);
+  assert.equal(sheet.getCell("B1"), 1234.5);
+  assert.ok(report.warnings.some((w) => w.code === "XLSX-IMPORT-STYLES"));
+});

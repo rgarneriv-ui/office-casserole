@@ -20,7 +20,9 @@ for (const app of apps) {
   const js = await readFile(`${out}/bundle.js`, "utf8");
   await writeFile(
     `${out}/index.standalone.html`,
-    html.replace('<script src="bundle.js"></script>', `<script>\n${js}\n</script>`)
+    // replacer function: the bundle may contain $-patterns ($&, $', …) that a
+    // plain replacement string would expand
+    html.replace('<script src="bundle.js"></script>', () => `<script>\n${js}\n</script>`)
   );
   console.log(`${app} built → ${out}/`);
 }

@@ -5,7 +5,7 @@
  * always produced by the deterministic engine (§7.4), never by the UI.
  */
 
-import { Sheet } from "../../../engines/spreadsheet-calc/src/engine";
+import { CellFormat, Sheet } from "../../../engines/spreadsheet-calc/src/engine";
 import { colToName, formatAddr, parseAddr } from "../../../engines/spreadsheet-calc/src/addr";
 import { isError } from "../../../engines/spreadsheet-calc/src/types";
 import { exportXlsx, importXlsx } from "../../../engines/format-conversion/src/xlsx";
@@ -41,9 +41,12 @@ function restore(): void {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return seed();
-    const entries = JSON.parse(raw) as { addr: string; input: string }[];
+    const entries = JSON.parse(raw) as { addr: string; input: string; format?: CellFormat }[];
     if (entries.length === 0) return seed();
-    for (const { addr, input } of entries) sheet.setCell(addr, input);
+    for (const e of entries) {
+      sheet.setCell(e.addr, e.input);
+      if (e.format) sheet.setFormat(e.addr, e.format);
+    }
     statusEl.textContent = "Restored sheet";
   } catch {
     seed();
@@ -67,6 +70,12 @@ function seed(): void {
   sheet.setCell("D7", "=ROUND(AVERAGE(D2:D4), 2)");
   sheet.setCell("A8", "Over budget?");
   sheet.setCell("D8", '=IF(D6>300, "YES", "no")');
+  for (const a of ["C2", "C3", "C4", "D2", "D3", "D4", "D6", "D7"]) {
+    sheet.setFormat(a, { numFmt: "currency" });
+  }
+  for (const a of ["A1", "B1", "C1", "D1", "A6", "A7", "A8"]) {
+    sheet.setFormat(a, { bold: true });
+  }
 }
 
 // ---------- rendering ----------
@@ -89,14 +98,47 @@ function refreshValues(): void {
   gridEl.querySelectorAll<HTMLTableCellElement>("td[data-addr]").forEach((td) => {
     const addr = td.dataset.addr!;
     const value = sheet.getCell(addr);
+    const fmt = sheet.getFormat(addr);
     td.textContent = sheet.getDisplay(addr);
     td.classList.toggle("error", isError(value));
     td.classList.toggle("num", typeof value === "number");
     td.classList.toggle("selected", addr === selected);
+    td.classList.toggle("bold", fmt.bold === true);
+    td.style.textAlign = fmt.align ?? "";
   });
   addrEl.textContent = selected;
   if (!editing) formulaEl.value = sheet.getInput(selected);
+  syncFormatToolbar();
 }
+
+function syncFormatToolbar(): void {
+  const fmt = sheet.getFormat(selected);
+  document.getElementById("btn-bold")?.classList.toggle("active", fmt.bold === true);
+  const numSel = document.getElementById("fmt-num") as HTMLSelectElement | null;
+  if (numSel) numSel.value = fmt.numFmt ?? "general";
+  const alignSel = document.getElementById("fmt-align") as HTMLSelectElement | null;
+  if (alignSel) alignSel.value = fmt.align ?? "auto";
+}
+
+document.getElementById("btn-bold")?.addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  sheet.setFormat(selected, { bold: sheet.getFormat(selected).bold ? null : true });
+  refreshValues();
+  scheduleSave();
+});
+document.getElementById("fmt-num")?.addEventListener("change", (e) => {
+  sheet.setFormat(selected, { numFmt: (e.target as HTMLSelectElement).value });
+  refreshValues();
+  scheduleSave();
+  formulaEl.focus();
+});
+document.getElementById("fmt-align")?.addEventListener("change", (e) => {
+  const v = (e.target as HTMLSelectElement).value;
+  sheet.setFormat(selected, { align: v === "auto" ? null : v });
+  refreshValues();
+  scheduleSave();
+  formulaEl.focus();
+});
 
 function select(addr: string): void {
   selected = addr;

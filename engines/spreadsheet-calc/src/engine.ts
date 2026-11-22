@@ -10,14 +10,38 @@ import { FUNCTIONS, toNumber, toText } from "./functions";
 import { FormulaError, parseFormula } from "./parse";
 import { Addr, Ast, CellValue, err, isError } from "./types";
 
+export type NumFmt = "general" | "number2" | "currency" | "percent";
+
+export interface CellFormat {
+  bold?: boolean;
+  align?: "left" | "center" | "right";
+  numFmt?: NumFmt;
+}
+
 interface Cell {
   input: string;
   formula: Ast | null;
   value: CellValue;
+  format?: CellFormat;
   /** keys of cells this cell reads */
   deps: Set<string>;
   /** keys of cells that read this cell */
   dependents: Set<string>;
+}
+
+function formatNumber(v: number, fmt: NumFmt): string {
+  const grouped = (n: number, dec: number) =>
+    n.toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+  switch (fmt) {
+    case "number2":
+      return grouped(v, 2);
+    case "currency":
+      return v < 0 ? `-$${grouped(-v, 2)}` : `$${grouped(v, 2)}`;
+    case "percent":
+      return `${grouped(v * 100, 2)}%`;
+    default:
+      return Number.isInteger(v) ? String(v) : String(Math.round(v * 1e10) / 1e10);
+  }
 }
 
 function collectRefs(ast: Ast, out: Set<string>): void {
@@ -82,19 +106,47 @@ export class Sheet {
     if (isError(v)) return v.code;
     if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
     if (typeof v === "number") {
-      if (Number.isInteger(v)) return String(v);
-      return String(Math.round(v * 1e10) / 1e10);
+      return formatNumber(v, this.getFormat(ref).numFmt ?? "general");
     }
     return v;
   }
 
-  /** All non-empty cells, for persistence. */
-  entries(): { addr: string; input: string }[] {
-    const out: { addr: string; input: string }[] = [];
+  getFormat(ref: string | Addr): CellFormat {
+    const key = typeof ref === "string" ? this.keyOf(ref) : addrKey(ref);
+    if (key === null) return {};
+    return { ...(this.cells.get(key)?.format ?? {}) };
+  }
+
+  /** Merge a format patch into the cell; null values clear keys. Formats are
+   *  display-only: values and the dependency graph are untouched. */
+  setFormat(ref: string | Addr, patch: Partial<Record<keyof CellFormat, unknown>>): void {
+    const key = typeof ref === "string" ? this.keyOf(ref) : addrKey(ref);
+    if (key === null) throw new Error(`Invalid cell reference ${String(ref)}`);
+    const cell = this.ensure(key);
+    const next: CellFormat = { ...(cell.format ?? {}) };
+    for (const [k, v] of Object.entries(patch)) {
+      if (v === null || v === undefined || v === false || v === "general") {
+        delete next[k as keyof CellFormat];
+      } else {
+        (next as Record<string, unknown>)[k] = v;
+      }
+    }
+    if (Object.keys(next).length === 0) delete cell.format;
+    else cell.format = next;
+  }
+
+  /** All non-empty cells (input or format), for persistence. */
+  entries(): { addr: string; input: string; format?: CellFormat }[] {
+    const out: { addr: string; input: string; format?: CellFormat }[] = [];
     for (const [key, cell] of this.cells) {
-      if (cell.input !== "") {
+      if (cell.input !== "" || cell.format) {
         const [col, row] = key.split(":").map(Number);
-        out.push({ addr: formatAddr({ col: col!, row: row! }), input: cell.input });
+        const entry: { addr: string; input: string; format?: CellFormat } = {
+          addr: formatAddr({ col: col!, row: row! }),
+          input: cell.input,
+        };
+        if (cell.format) entry.format = { ...cell.format };
+        out.push(entry);
       }
     }
     return out;

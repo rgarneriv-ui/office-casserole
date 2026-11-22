@@ -56,32 +56,69 @@ const XLSX_WORKBOOK_RELS =
   `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>` +
   `</Relationships>`;
 
+// style indexing: xf index = 1 + fontBit*3 + numFmtIndex (numFmtIndex: 0 none
+// is folded into fontBit rows; see styleIndexFor). Custom numFmt ids start at 164.
+const NUM_FMT_CODES: Record<string, { id: number; code: string }> = {
+  number2: { id: 164, code: "#,##0.00" },
+  currency: { id: 165, code: "&quot;$&quot;#,##0.00" },
+  percent: { id: 166, code: "0.00%" },
+};
+
+/** xf table: [0]=default, then (plain|bold) x (general|number2|currency|percent). */
+const XF_NUMFMTS = ["general", "number2", "currency", "percent"] as const;
+
+export function styleIndexFor(format: { bold?: boolean; numFmt?: string } | undefined): number {
+  if (!format || (!format.bold && !format.numFmt)) return 0;
+  const fontBit = format.bold ? 1 : 0;
+  const nf = XF_NUMFMTS.indexOf((format.numFmt ?? "general") as (typeof XF_NUMFMTS)[number]);
+  return 1 + fontBit * 4 + Math.max(0, nf);
+}
+
 const XLSX_STYLES =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
   `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
-  `<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>` +
+  `<numFmts count="3">` +
+  Object.values(NUM_FMT_CODES)
+    .map((f) => `<numFmt numFmtId="${f.id}" formatCode="${f.code}"/>`)
+    .join("") +
+  `</numFmts>` +
+  `<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>` +
+  `<font><b/><sz val="11"/><name val="Calibri"/></font></fonts>` +
   `<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>` +
   `<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>` +
   `<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>` +
-  `<cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs>` +
+  `<cellXfs count="9">` +
+  `<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>` +
+  [0, 1]
+    .map((fontId) =>
+      XF_NUMFMTS.map((nf) => {
+        const numFmtId = nf === "general" ? 0 : NUM_FMT_CODES[nf]!.id;
+        return `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="0" borderId="0" xfId="0" applyFont="${fontId}" applyNumberFormat="${numFmtId ? 1 : 0}"/>`;
+      }).join("")
+    )
+    .join("") +
+  `</cellXfs>` +
   `<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>` +
   `</styleSheet>`;
 
 function cellXml(addr: string, input: string, sheet: Sheet): string | null {
   const value = sheet.getCell(addr);
+  const si = styleIndexFor(sheet.getFormat(addr));
+  const sAttr = si > 0 ? ` s="${si}"` : "";
   if (input.startsWith("=")) {
     const f = `<f>${xmlEscape(input.slice(1))}</f>`;
-    if (isError(value)) return `<c r="${addr}" t="e">${f}<v>${value.code}</v></c>`;
-    if (typeof value === "number") return `<c r="${addr}">${f}<v>${value}</v></c>`;
-    if (typeof value === "boolean") return `<c r="${addr}" t="b">${f}<v>${value ? 1 : 0}</v></c>`;
+    if (isError(value)) return `<c r="${addr}"${sAttr} t="e">${f}<v>${value.code}</v></c>`;
+    if (typeof value === "number") return `<c r="${addr}"${sAttr}>${f}<v>${value}</v></c>`;
+    if (typeof value === "boolean") return `<c r="${addr}"${sAttr} t="b">${f}<v>${value ? 1 : 0}</v></c>`;
     if (typeof value === "string")
-      return `<c r="${addr}" t="str">${f}<v>${xmlEscape(value)}</v></c>`;
-    return `<c r="${addr}">${f}</c>`;
+      return `<c r="${addr}"${sAttr} t="str">${f}<v>${xmlEscape(value)}</v></c>`;
+    return `<c r="${addr}"${sAttr}>${f}</c>`;
   }
-  if (typeof value === "number") return `<c r="${addr}"><v>${value}</v></c>`;
-  if (typeof value === "boolean") return `<c r="${addr}" t="b"><v>${value ? 1 : 0}</v></c>`;
+  if (typeof value === "number") return `<c r="${addr}"${sAttr}><v>${value}</v></c>`;
+  if (typeof value === "boolean") return `<c r="${addr}"${sAttr} t="b"><v>${value ? 1 : 0}</v></c>`;
   if (typeof value === "string")
-    return `<c r="${addr}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value)}</t></is></c>`;
+    return `<c r="${addr}"${sAttr} t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value)}</t></is></c>`;
+  if (si > 0) return `<c r="${addr}" s="${si}"/>`; // format on an empty cell
   return null;
 }
 

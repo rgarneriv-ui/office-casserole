@@ -182,3 +182,42 @@ test("string comparison is case-insensitive; text sorts above numbers", () => {
   assert.equal(s.getCell("A1"), true);
   assert.equal(s.getCell("A2"), true);
 });
+
+test("formats: display-only number formats, bold/align merge and clear", () => {
+  const s = new Sheet();
+  s.setCell("A1", "1234.5");
+  s.setCell("A2", "0.125");
+  s.setCell("A3", "-42");
+  s.setFormat("A1", { numFmt: "currency", bold: true });
+  s.setFormat("A2", { numFmt: "percent" });
+  s.setFormat("A3", { numFmt: "number2", align: "center" });
+  assert.equal(s.getDisplay("A1"), "$1,234.50");
+  assert.equal(s.getDisplay("A2"), "12.50%");
+  assert.equal(s.getDisplay("A3"), "-42.00");
+  assert.equal(s.getCell("A1"), 1234.5, "value untouched by formatting");
+  assert.deepEqual(s.getFormat("A1"), { numFmt: "currency", bold: true });
+  // clearing
+  s.setFormat("A1", { bold: null, numFmt: "general" });
+  assert.deepEqual(s.getFormat("A1"), {});
+  assert.equal(s.getDisplay("A1"), "1234.5");
+  // formulas format their computed values
+  s.setCell("B1", "=A1*2");
+  s.setFormat("B1", { numFmt: "currency" });
+  assert.equal(s.getDisplay("B1"), "$2,469.00");
+});
+
+test("formats: persistence round-trip through entries(), including format-only cells", () => {
+  const s = new Sheet();
+  s.setCell("A1", "5");
+  s.setFormat("A1", { bold: true });
+  s.setFormat("B9", { numFmt: "percent" }); // no input at all
+  const restored = new Sheet();
+  for (const e of s.entries()) {
+    restored.setCell(e.addr, e.input);
+    if (e.format) restored.setFormat(e.addr, e.format);
+  }
+  assert.deepEqual(restored.getFormat("A1"), { bold: true });
+  assert.deepEqual(restored.getFormat("B9"), { numFmt: "percent" });
+  restored.setCell("B9", "0.5");
+  assert.equal(restored.getDisplay("B9"), "50.00%");
+});
