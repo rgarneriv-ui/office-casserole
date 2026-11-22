@@ -1,0 +1,112 @@
+import { strict as assert } from "node:assert";
+import test from "node:test";
+import { JSDOM } from "jsdom";
+import { exportXlsx, importXlsx } from "../src/xlsx";
+import { zipRead, zipWrite } from "../src/zip";
+import { Sheet } from "../../spreadsheet-calc/src/engine";
+import { isError } from "../../spreadsheet-calc/src/types";
+
+const parseXml = (xml: string): Document =>
+  new (new JSDOM("").window.DOMParser)().parseFromString(xml, "application/xml") as unknown as Document;
+
+function sample(): Sheet {
+  const s = new Sheet();
+  s.setCell("A1", "Item");
+  s.setCell("B1", "Qty");
+  s.setCell("C1", "Unit");
+  s.setCell("A2", "Paper");
+  s.setCell("B2", "12");
+  s.setCell("C2", "4.5");
+  s.setCell("D2", "=B2*C2");
+  s.setCell("A3", "Done?");
+  s.setCell("B3", "TRUE");
+  s.setCell("D4", "=SUM(D2:D3)");
+  s.setCell("D5", '=IF(D4>50, "big", "small")');
+  s.setCell("E1", "=1/0");
+  return s;
+}
+
+test("xlsx: export package shape and cell encodings", async () => {
+  const { bytes, report } = await exportXlsx(sample());
+  assert.equal(report.lossless, true);
+  const entries = await zipRead(bytes);
+  const names = entries.map((e) => e.name);
+  assert.ok(names.includes("xl/workbook.xml"));
+  assert.ok(names.includes("xl/worksheets/sheet1.xml"));
+  assert.ok(names.includes("xl/styles.xml"));
+  const ws = new TextDecoder().decode(entries.find((e) => e.name === "xl/worksheets/sheet1.xml")!.data);
+  assert.ok(ws.includes('<c r="A1" t="inlineStr"><is><t xml:space="preserve">Item</t></is></c>'), "inline string");
+  assert.ok(ws.includes('<c r="B2"><v>12</v></c>'), "number");
+  assert.ok(ws.includes('<c r="D2"><f>B2*C2</f><v>54</v></c>'), "formula with computed value");
+  assert.ok(ws.includes('<c r="B3" t="b"><v>1</v></c>'), "boolean");
+  assert.ok(ws.includes('<c r="E1" t="e"><f>1/0</f><v>#DIV/0!</v></c>'), "error cell");
+  assert.ok(ws.includes('t="str"'), "string formula result typed str");
+});
+
+test("xlsx: export → import round-trip preserves inputs and recomputes identically", async () => {
+  const original = sample();
+  const { bytes } = await exportXlsx(original);
+  const { sheet, report } = await importXlsx(bytes, parseXml);
+  assert.equal(report.lossless, true, JSON.stringify(report.warnings));
+  for (const { addr, input } of original.entries()) {
+    assert.equal(sheet.getInput(addr), input, `input of ${addr}`);
+    assert.equal(sheet.getDisplay(addr), original.getDisplay(addr), `display of ${addr}`);
+  }
+});
+
+test("xlsx: import reads sharedStrings-style producers", async () => {
+  const sst =
+    `<?xml version="1.0"?><sst xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" count="2" uniqueCount="2">` +
+    `<si><t>Hello</t></si><si><r><t>Wor</t></r><r><t>ld</t></r></si></sst>`;
+  const ws =
+    `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>` +
+    `<row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1" t="s"><v>1</v></c><c r="C1"><v>7</v></c></row>` +
+    `</sheetData></worksheet>`;
+  const bytes = await zipWrite([
+    { name: "xl/workbook.xml", data: new TextEncoder().encode(`<workbook xmlns="x"><sheets><sheet name="S" sheetId="1"/></sheets></workbook>`) },
+    { name: "xl/sharedStrings.xml", data: new TextEncoder().encode(sst) },
+    { name: "xl/worksheets/sheet1.xml", data: new TextEncoder().encode(ws) },
+  ]);
+  const { sheet } = await importXlsx(bytes, parseXml);
+  assert.equal(sheet.getCell("A1"), "Hello");
+  assert.equal(sheet.getCell("B1"), "World");
+  assert.equal(sheet.getCell("C1"), 7);
+});
+
+test("xlsx: value mismatches and unsupported functions are reported, not hidden", async () => {
+  const ws =
+    `<?xml version="1.0"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>` +
+    `<row r="1"><c r="A1"><v>10</v></c>` +
+    `<c r="B1"><f>A1*2</f><v>999</v></c>` + // wrong stored value
+    `<c r="C1"><f>VLOOKUP(A1,D1:E9,2)</f><v>42</v></c>` + // unsupported function
+    `</row></sheetData></worksheet>`;
+  const bytes = await zipWrite([
+    { name: "xl/workbook.xml", data: new TextEncoder().encode(`<workbook xmlns="x"><sheets><sheet name="S" sheetId="1"/></sheets></workbook>`) },
+    { name: "xl/worksheets/sheet1.xml", data: new TextEncoder().encode(ws) },
+  ]);
+  const { sheet, report } = await importXlsx(bytes, parseXml);
+  assert.equal(sheet.getCell("B1"), 20, "our engine recomputes honestly");
+  const codes = report.warnings.map((w) => w.code);
+  assert.ok(codes.includes("XLSX-IMPORT-VALUE-MISMATCH"), JSON.stringify(codes));
+  assert.ok(codes.includes("XLSX-IMPORT-FORMULA-UNSUPPORTED"));
+  const c1 = sheet.getCell("C1");
+  assert.ok(isError(c1) && c1.code === "#NAME?", "unsupported function surfaces as #NAME?");
+});
+
+test("xlsx: multi-sheet workbooks import the first sheet with a warning", async () => {
+  const wb = `<workbook xmlns="x"><sheets><sheet name="A" sheetId="1"/><sheet name="B" sheetId="2"/></sheets></workbook>`;
+  const ws = `<worksheet xmlns="x"><sheetData><row r="1"><c r="A1"><v>1</v></c></row></sheetData></worksheet>`;
+  const bytes = await zipWrite([
+    { name: "xl/workbook.xml", data: new TextEncoder().encode(wb) },
+    { name: "xl/worksheets/sheet1.xml", data: new TextEncoder().encode(ws) },
+    { name: "xl/worksheets/sheet2.xml", data: new TextEncoder().encode(ws) },
+  ]);
+  const { report } = await importXlsx(bytes, parseXml);
+  assert.ok(report.warnings.some((w) => w.code === "XLSX-IMPORT-SHEETS"));
+});
+
+test("xlsx: non-xlsx input fails loudly", async () => {
+  await assert.rejects(() => importXlsx(new TextEncoder().encode("junk"), parseXml));
+  const bytes = await zipWrite([{ name: "word/document.xml", data: new TextEncoder().encode("<x/>") }]);
+  await assert.rejects(() => importXlsx(bytes, parseXml), /workbook\.xml missing/);
+});

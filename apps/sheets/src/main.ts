@@ -8,6 +8,7 @@
 import { Sheet } from "../../../engines/spreadsheet-calc/src/engine";
 import { colToName, formatAddr, parseAddr } from "../../../engines/spreadsheet-calc/src/addr";
 import { isError } from "../../../engines/spreadsheet-calc/src/types";
+import { exportXlsx, importXlsx } from "../../../engines/format-conversion/src/xlsx";
 
 const COLS = 12;
 const ROWS = 40;
@@ -192,6 +193,61 @@ document.getElementById("btn-export-csv")?.addEventListener("click", async () =>
   a.download = "sheet.csv";
   a.click();
   URL.revokeObjectURL(a.href);
+});
+
+async function deliverBlob(filename: string, blob: Blob): Promise<void> {
+  if (hostDownloads) {
+    try {
+      await hostDownloads.save({ filename, data: blob });
+      return;
+    } catch { /* fall through */ }
+  }
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+document.getElementById("btn-export-xlsx")?.addEventListener("click", async () => {
+  try {
+    const { bytes } = await exportXlsx(sheet);
+    await deliverBlob(
+      "sheet.xlsx",
+      new Blob([bytes as BlobPart], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      })
+    );
+  } catch (err) {
+    statusEl.textContent = `⚠ XLSX export failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+});
+
+document.getElementById("btn-open")?.addEventListener("click", () => {
+  (document.getElementById("file-open") as HTMLInputElement | null)?.click();
+});
+document.getElementById("file-open")?.addEventListener("change", async (e) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  try {
+    const { sheet: imported, report } = await importXlsx(new Uint8Array(await file.arrayBuffer()));
+    sheet = imported;
+    selected = "A1";
+    refreshValues();
+    scheduleSave();
+    if (report.lossless) {
+      statusEl.textContent = "Imported XLSX — no loss detected for this workbook";
+    } else {
+      statusEl.textContent = `Imported XLSX with ${report.warnings.length} note(s)`;
+      window.alert(
+        "Import loss report:\n\n" + [...new Set(report.warnings.map((w) => `• ${w.message}`))].join("\n")
+      );
+    }
+  } catch (err) {
+    statusEl.textContent = `⚠ Import failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
 });
 
 document.getElementById("btn-clear")?.addEventListener("click", () => {

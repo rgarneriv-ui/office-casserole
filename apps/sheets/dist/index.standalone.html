@@ -43,6 +43,9 @@
     <span id="addr">A1</span>
     <input id="formula" type="text" spellcheck="false"
            placeholder='Value or formula, e.g. =SUM(A1:A3) or =IF(D6>300, "YES", "no")' />
+    <button id="btn-open" title="Open an .xlsx workbook">Open…</button>
+    <input id="file-open" type="file" accept=".xlsx" style="display:none" />
+    <button id="btn-export-xlsx" title="Export Excel workbook (.xlsx)">↓ XLSX</button>
     <button id="btn-export-csv" title="Export visible values as CSV">↓ CSV</button>
     <button id="btn-clear" title="Clear the sheet">Clear</button>
     <span id="status">Ready</span>
@@ -743,6 +746,340 @@
     }
   };
 
+  // engines/format-conversion/src/zip.ts
+  var CRC_TABLE = (() => {
+    const table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+      table[n] = c >>> 0;
+    }
+    return table;
+  })();
+  function crc32(data) {
+    let crc = 4294967295;
+    for (let i = 0; i < data.length; i++) {
+      crc = CRC_TABLE[(crc ^ data[i]) & 255] ^ crc >>> 8;
+    }
+    return (crc ^ 4294967295) >>> 0;
+  }
+  async function pipeThrough(data, stream) {
+    const src = new Blob([data]).stream();
+    const buf = await new Response(src.pipeThrough(stream)).arrayBuffer();
+    return new Uint8Array(buf);
+  }
+  async function deflateRaw(data) {
+    if (typeof CompressionStream === "undefined") return null;
+    return pipeThrough(data, new CompressionStream("deflate-raw"));
+  }
+  async function inflateRaw(data) {
+    if (typeof DecompressionStream === "undefined") {
+      throw new Error("Cannot read compressed ZIP entries: DecompressionStream unavailable");
+    }
+    return pipeThrough(data, new DecompressionStream("deflate-raw"));
+  }
+  var textEncoder = new TextEncoder();
+  async function zipWrite(entries) {
+    const prepared = [];
+    const chunks = [];
+    let offset = 0;
+    for (const entry of entries) {
+      const nameBytes = textEncoder.encode(entry.name);
+      const crc = crc32(entry.data);
+      const deflated = await deflateRaw(entry.data);
+      const useDeflate = deflated !== null && deflated.length < entry.data.length;
+      const raw = useDeflate ? deflated : entry.data;
+      const method = useDeflate ? 8 : 0;
+      const header = new DataView(new ArrayBuffer(30));
+      header.setUint32(0, 67324752, true);
+      header.setUint16(4, 20, true);
+      header.setUint16(6, 0, true);
+      header.setUint16(8, method, true);
+      header.setUint16(10, 0, true);
+      header.setUint16(12, 33, true);
+      header.setUint32(14, crc, true);
+      header.setUint32(18, raw.length, true);
+      header.setUint32(22, entry.data.length, true);
+      header.setUint16(26, nameBytes.length, true);
+      header.setUint16(28, 0, true);
+      prepared.push({ nameBytes, data: entry.data, raw, method, crc, offset });
+      chunks.push(new Uint8Array(header.buffer), nameBytes, raw);
+      offset += 30 + nameBytes.length + raw.length;
+    }
+    const cdStart = offset;
+    for (const p of prepared) {
+      const cd = new DataView(new ArrayBuffer(46));
+      cd.setUint32(0, 33639248, true);
+      cd.setUint16(4, 20, true);
+      cd.setUint16(6, 20, true);
+      cd.setUint16(8, 0, true);
+      cd.setUint16(10, p.method, true);
+      cd.setUint16(12, 0, true);
+      cd.setUint16(14, 33, true);
+      cd.setUint32(16, p.crc, true);
+      cd.setUint32(20, p.raw.length, true);
+      cd.setUint32(24, p.data.length, true);
+      cd.setUint16(28, p.nameBytes.length, true);
+      cd.setUint16(30, 0, true);
+      cd.setUint16(32, 0, true);
+      cd.setUint16(34, 0, true);
+      cd.setUint16(36, 0, true);
+      cd.setUint32(38, 0, true);
+      cd.setUint32(42, p.offset, true);
+      chunks.push(new Uint8Array(cd.buffer), p.nameBytes);
+      offset += 46 + p.nameBytes.length;
+    }
+    const eocd = new DataView(new ArrayBuffer(22));
+    eocd.setUint32(0, 101010256, true);
+    eocd.setUint16(4, 0, true);
+    eocd.setUint16(6, 0, true);
+    eocd.setUint16(8, prepared.length, true);
+    eocd.setUint16(10, prepared.length, true);
+    eocd.setUint32(12, offset - cdStart, true);
+    eocd.setUint32(16, cdStart, true);
+    eocd.setUint16(20, 0, true);
+    chunks.push(new Uint8Array(eocd.buffer));
+    const total = chunks.reduce((n, c) => n + c.length, 0);
+    const out = new Uint8Array(total);
+    let pos = 0;
+    for (const c of chunks) {
+      out.set(c, pos);
+      pos += c.length;
+    }
+    return out;
+  }
+  var textDecoder = new TextDecoder();
+  async function zipRead(bytes) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let eocd = -1;
+    const scanFloor = Math.max(0, bytes.length - 65558);
+    for (let i = bytes.length - 22; i >= scanFloor; i--) {
+      if (view.getUint32(i, true) === 101010256) {
+        eocd = i;
+        break;
+      }
+    }
+    if (eocd < 0) throw new Error("Not a ZIP archive (no end-of-central-directory record)");
+    const count = view.getUint16(eocd + 10, true);
+    const cdOffset = view.getUint32(eocd + 16, true);
+    const entries = [];
+    let p = cdOffset;
+    for (let i = 0; i < count; i++) {
+      if (view.getUint32(p, true) !== 33639248) {
+        throw new Error("Corrupt ZIP: bad central-directory signature");
+      }
+      const method = view.getUint16(p + 10, true);
+      const crc = view.getUint32(p + 16, true);
+      const compSize = view.getUint32(p + 20, true);
+      const uncompSize = view.getUint32(p + 24, true);
+      const nameLen = view.getUint16(p + 28, true);
+      const extraLen = view.getUint16(p + 30, true);
+      const commentLen = view.getUint16(p + 32, true);
+      const localOffset = view.getUint32(p + 42, true);
+      const name = textDecoder.decode(bytes.subarray(p + 46, p + 46 + nameLen));
+      p += 46 + nameLen + extraLen + commentLen;
+      const lNameLen = view.getUint16(localOffset + 26, true);
+      const lExtraLen = view.getUint16(localOffset + 28, true);
+      const dataStart = localOffset + 30 + lNameLen + lExtraLen;
+      const raw = bytes.subarray(dataStart, dataStart + compSize);
+      let data;
+      if (method === 0) data = new Uint8Array(raw);
+      else if (method === 8) data = await inflateRaw(new Uint8Array(raw));
+      else throw new Error(`Unsupported ZIP compression method ${method} for ${name}`);
+      if (data.length !== uncompSize) {
+        throw new Error(`Corrupt ZIP entry ${name}: size mismatch`);
+      }
+      if (crc32(data) !== crc) {
+        throw new Error(`Corrupt ZIP entry ${name}: CRC mismatch`);
+      }
+      entries.push({ name, data });
+    }
+    return entries;
+  }
+
+  // engines/format-conversion/src/xlsx.ts
+  var textEncoder2 = new TextEncoder();
+  var textDecoder2 = new TextDecoder();
+  function xmlEscape(text) {
+    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  var XLSX_CONTENT_TYPES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>`;
+  var XLSX_ROOT_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`;
+  var XLSX_WORKBOOK = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>`;
+  var XLSX_WORKBOOK_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
+  var XLSX_STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/></cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
+  function cellXml(addr, input, sheet2) {
+    const value = sheet2.getCell(addr);
+    if (input.startsWith("=")) {
+      const f = `<f>${xmlEscape(input.slice(1))}</f>`;
+      if (isError(value)) return `<c r="${addr}" t="e">${f}<v>${value.code}</v></c>`;
+      if (typeof value === "number") return `<c r="${addr}">${f}<v>${value}</v></c>`;
+      if (typeof value === "boolean") return `<c r="${addr}" t="b">${f}<v>${value ? 1 : 0}</v></c>`;
+      if (typeof value === "string")
+        return `<c r="${addr}" t="str">${f}<v>${xmlEscape(value)}</v></c>`;
+      return `<c r="${addr}">${f}</c>`;
+    }
+    if (typeof value === "number") return `<c r="${addr}"><v>${value}</v></c>`;
+    if (typeof value === "boolean") return `<c r="${addr}" t="b"><v>${value ? 1 : 0}</v></c>`;
+    if (typeof value === "string")
+      return `<c r="${addr}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(value)}</t></is></c>`;
+    return null;
+  }
+  async function exportXlsx(sheet2) {
+    const rows = /* @__PURE__ */ new Map();
+    for (const { addr, input } of sheet2.entries()) {
+      const a = parseAddr(addr);
+      const xml = cellXml(addr, input, sheet2);
+      if (!xml) continue;
+      if (!rows.has(a.row)) rows.set(a.row, []);
+      rows.get(a.row).push({ col: a.col, xml });
+    }
+    const rowXml = [...rows.entries()].sort((a, b) => a[0] - b[0]).map(
+      ([r, cells]) => `<row r="${r + 1}">${cells.sort((a, b) => a.col - b.col).map((c) => c.xml).join("")}</row>`
+    ).join("");
+    const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rowXml}</sheetData></worksheet>`;
+    const entries = [
+      { name: "[Content_Types].xml", data: textEncoder2.encode(XLSX_CONTENT_TYPES) },
+      { name: "_rels/.rels", data: textEncoder2.encode(XLSX_ROOT_RELS) },
+      { name: "xl/workbook.xml", data: textEncoder2.encode(XLSX_WORKBOOK) },
+      { name: "xl/_rels/workbook.xml.rels", data: textEncoder2.encode(XLSX_WORKBOOK_RELS) },
+      { name: "xl/styles.xml", data: textEncoder2.encode(XLSX_STYLES) },
+      { name: "xl/worksheets/sheet1.xml", data: textEncoder2.encode(sheetXml) }
+    ];
+    return { bytes: await zipWrite(entries), report: { format: "xlsx", lossless: true, warnings: [] } };
+  }
+  function defaultParse(xml) {
+    if (typeof DOMParser === "undefined") {
+      throw new Error("No XML parser available: pass parseXml to importXlsx");
+    }
+    return new DOMParser().parseFromString(xml, "application/xml");
+  }
+  function descendants(el, name) {
+    const out = [];
+    const walk = (e) => {
+      const children = e.children ?? [];
+      for (let i = 0; i < children.length; i++) {
+        const c = children[i];
+        if (c.localName === name) out.push(c);
+        walk(c);
+      }
+    };
+    walk(el);
+    return out;
+  }
+  function firstChild(el, name) {
+    for (let i = 0; i < el.children.length; i++) {
+      if (el.children[i].localName === name) return el.children[i];
+    }
+    return null;
+  }
+  async function importXlsx(bytes, parseXml = defaultParse) {
+    const warnings = [];
+    const entries = await zipRead(bytes);
+    const byName = new Map(entries.map((e) => [e.name, e]));
+    const workbookEntry = byName.get("xl/workbook.xml");
+    if (!workbookEntry) throw new Error("Not an XLSX package: xl/workbook.xml missing");
+    const shared = [];
+    const sst = byName.get("xl/sharedStrings.xml");
+    if (sst) {
+      const dom = parseXml(textDecoder2.decode(sst.data));
+      for (const si of descendants(dom, "si")) {
+        shared.push(descendants(si, "t").map((t) => t.textContent ?? "").join(""));
+      }
+    }
+    const workbook = parseXml(textDecoder2.decode(workbookEntry.data));
+    const sheetTags = descendants(workbook, "sheet");
+    if (sheetTags.length > 1) {
+      warnings.push({
+        code: "XLSX-IMPORT-SHEETS",
+        message: `Workbook has ${sheetTags.length} sheets; only the first was imported.`,
+        blockIndex: -1
+      });
+    }
+    const wsName = [...byName.keys()].find((n) => /^xl\/worksheets\/sheet1\.xml$/.test(n)) ?? [...byName.keys()].find((n) => /^xl\/worksheets\/.*\.xml$/.test(n));
+    if (!wsName) throw new Error("XLSX package has no worksheet part");
+    const ws = parseXml(textDecoder2.decode(byName.get(wsName).data));
+    const sheet2 = new Sheet();
+    const formulas = [];
+    for (const c of descendants(ws, "c")) {
+      const addr = c.getAttribute("r");
+      if (!addr || !parseAddr(addr)) continue;
+      const type = c.getAttribute("t") ?? "n";
+      const f = firstChild(c, "f");
+      const v = firstChild(c, "v");
+      const is = firstChild(c, "is");
+      if (c.getAttribute("s")) {
+        if (!warnings.some((w) => w.code === "XLSX-IMPORT-STYLES")) {
+          warnings.push({
+            code: "XLSX-IMPORT-STYLES",
+            message: "Cell formatting/styles are not yet supported and were dropped.",
+            blockIndex: -1
+          });
+        }
+      }
+      if (f && f.textContent) {
+        sheet2.setCell(addr, "=" + f.textContent);
+        formulas.push({ addr, storedValue: v?.textContent ?? null, type });
+        continue;
+      }
+      if (type === "s") {
+        const idx = Number(v?.textContent ?? "");
+        sheet2.setCell(addr, shared[idx] ?? "");
+      } else if (type === "inlineStr") {
+        sheet2.setCell(addr, descendants(is ?? c, "t").map((t) => t.textContent ?? "").join(""));
+      } else if (type === "str") {
+        sheet2.setCell(addr, v?.textContent ?? "");
+      } else if (type === "b") {
+        sheet2.setCell(addr, v?.textContent === "1" ? "TRUE" : "FALSE");
+      } else if (type === "e") {
+        warnings.push({
+          code: "XLSX-IMPORT-ERROR-LITERAL",
+          message: `Cell ${addr} held an error literal (${v?.textContent ?? "?"}) with no formula; imported as text.`,
+          blockIndex: -1
+        });
+        sheet2.setCell(addr, v?.textContent ?? "");
+      } else if (v?.textContent != null) {
+        sheet2.setCell(addr, v.textContent);
+      }
+    }
+    for (const { addr, storedValue, type } of formulas) {
+      if (storedValue === null) continue;
+      const ours = sheet2.getCell(addr);
+      let match;
+      if (isError(ours)) {
+        match = type === "e" && ours.code === storedValue;
+        if (type !== "e") {
+          warnings.push({
+            code: "XLSX-IMPORT-FORMULA-UNSUPPORTED",
+            message: `Formula in ${addr} (${sheet2.getInput(addr)}) evaluates to ${ours.code} in Casserole; the source stored ${storedValue}. Likely an unsupported function.`,
+            blockIndex: -1
+          });
+          continue;
+        }
+      } else if (typeof ours === "number") {
+        match = Math.abs(ours - Number(storedValue)) <= Math.max(1e-9, Math.abs(ours) * 1e-9);
+      } else if (typeof ours === "boolean") {
+        match = (ours ? "1" : "0") === storedValue || String(ours).toUpperCase() === storedValue;
+      } else {
+        match = String(ours ?? "") === storedValue;
+      }
+      if (!match) {
+        warnings.push({
+          code: "XLSX-IMPORT-VALUE-MISMATCH",
+          message: `Cell ${addr}: Casserole computes ${JSON.stringify(isError(ours) ? ours.code : ours)} but the source file stored ${JSON.stringify(storedValue)}.`,
+          blockIndex: -1
+        });
+      }
+    }
+    return { sheet: sheet2, report: { format: "xlsx", lossless: warnings.length === 0, warnings } };
+  }
+
   // apps/sheets/src/main.ts
   var COLS = 12;
   var ROWS = 40;
@@ -910,6 +1247,59 @@
     a.download = "sheet.csv";
     a.click();
     URL.revokeObjectURL(a.href);
+  });
+  async function deliverBlob(filename, blob) {
+    if (hostDownloads) {
+      try {
+        await hostDownloads.save({ filename, data: blob });
+        return;
+      } catch {
+      }
+    }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+  document.getElementById("btn-export-xlsx")?.addEventListener("click", async () => {
+    try {
+      const { bytes } = await exportXlsx(sheet);
+      await deliverBlob(
+        "sheet.xlsx",
+        new Blob([bytes], {
+          type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        })
+      );
+    } catch (err2) {
+      statusEl.textContent = `\u26A0 XLSX export failed: ${err2 instanceof Error ? err2.message : String(err2)}`;
+    }
+  });
+  document.getElementById("btn-open")?.addEventListener("click", () => {
+    document.getElementById("file-open")?.click();
+  });
+  document.getElementById("file-open")?.addEventListener("change", async (e) => {
+    const input = e.target;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    try {
+      const { sheet: imported, report } = await importXlsx(new Uint8Array(await file.arrayBuffer()));
+      sheet = imported;
+      selected = "A1";
+      refreshValues();
+      scheduleSave();
+      if (report.lossless) {
+        statusEl.textContent = "Imported XLSX \u2014 no loss detected for this workbook";
+      } else {
+        statusEl.textContent = `Imported XLSX with ${report.warnings.length} note(s)`;
+        window.alert(
+          "Import loss report:\n\n" + [...new Set(report.warnings.map((w) => `\u2022 ${w.message}`))].join("\n")
+        );
+      }
+    } catch (err2) {
+      statusEl.textContent = `\u26A0 Import failed: ${err2 instanceof Error ? err2.message : String(err2)}`;
+    }
   });
   document.getElementById("btn-clear")?.addEventListener("click", () => {
     if (!window.confirm("Clear the whole sheet? This cannot be undone.")) return;
