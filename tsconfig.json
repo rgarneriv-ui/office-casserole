@@ -13,6 +13,8 @@
   "include": [
     "engines/document-model/src/**/*.ts",
     "engines/document-model/test/**/*.ts",
+    "engines/format-conversion/src/**/*.ts",
+    "engines/format-conversion/test/**/*.ts",
     "packages/shared-types/src/**/*.ts"
   ]
 }

@@ -35,7 +35,8 @@ import {
   validateModel,
 } from "../../../engines/document-model/src/index";
 
-import { DocumentStore, StoredDocMeta, newDocId, openBestStore } from "./store";
+import { DocumentStore, newDocId, openBestStore } from "./store";
+import { exportDocx, importDocx } from "../../../engines/format-conversion/src/docx";
 
 const BLOCK_TAG: Record<string, string> = { paragraph: "p", heading1: "h1", heading2: "h2" };
 
@@ -461,20 +462,28 @@ if (window.claude?.use) {
   window.claude.use("downloads").then((d) => { hostDownloads = d; }).catch(() => {});
 }
 
-async function download(name: string, mime: string, content: string): Promise<void> {
+async function downloadBlob(name: string, blob: Blob): Promise<void> {
   if (hostDownloads) {
     try {
-      await hostDownloads.save({ filename: name, data: new Blob([content], { type: mime }) });
+      await hostDownloads.save({ filename: name, data: blob });
       return;
     } catch {
       /* viewer declined or save failed; fall through to anchor attempt */
     }
   }
   const a = document.createElement("a");
-  a.href = URL.createObjectURL(new Blob([content], { type: mime }));
+  a.href = URL.createObjectURL(blob);
   a.download = name;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+function download(name: string, mime: string, content: string): Promise<void> {
+  return downloadBlob(name, new Blob([content], { type: mime }));
+}
+
+function downloadBytes(name: string, mime: string, bytes: Uint8Array): Promise<void> {
+  return downloadBlob(name, new Blob([bytes as BlobPart], { type: mime }));
 }
 
 document.getElementById("btn-export-md")?.addEventListener("click", () => {
@@ -497,6 +506,52 @@ document.getElementById("btn-export-html")?.addEventListener("click", () => {
 });
 document.getElementById("btn-export-json")?.addEventListener("click", () => {
   download("document.json", "application/json", toJSON(model));
+});
+document.getElementById("btn-export-docx")?.addEventListener("click", async () => {
+  try {
+    const { bytes, report } = await exportDocx(model);
+    if (!report.lossless) {
+      const msgs = [...new Set(report.warnings.map((w) => w.message))].join("\n• ");
+      if (!window.confirm(`DOCX export is not lossless:\n\n• ${msgs}\n\nExport anyway?`)) return;
+    }
+    await downloadBytes(`${currentTitle || "document"}.docx`,
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document", bytes);
+  } catch (err) {
+    statusEl.textContent = `⚠ DOCX export failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+});
+document.getElementById("btn-open")?.addEventListener("click", () => {
+  (document.getElementById("file-open") as HTMLInputElement | null)?.click();
+});
+document.getElementById("file-open")?.addEventListener("change", async (e) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  try {
+    if (file.name.toLowerCase().endsWith(".json")) {
+      const imported = fromJSON(await file.text());
+      await createDoc(imported, file.name.replace(/\.json$/i, ""));
+      statusEl.textContent = "Imported JSON document";
+      return;
+    }
+    const { model: imported, report } = await importDocx(new Uint8Array(await file.arrayBuffer()));
+    await createDoc(imported, file.name.replace(/\.docx$/i, ""));
+    if (report.lossless) {
+      statusEl.textContent = "Imported DOCX — no loss detected for this document";
+    } else {
+      const byCode = new Map<string, number>();
+      report.warnings.forEach((w) => byCode.set(w.code, (byCode.get(w.code) ?? 0) + 1));
+      const summary = [...byCode.entries()].map(([c, n]) => `${c} ×${n}`).join(", ");
+      statusEl.textContent = `Imported DOCX with losses: ${summary}`;
+      window.alert(
+        `Import loss report:\n\n` +
+          [...new Set(report.warnings.map((w) => `• ${w.message}`))].join("\n")
+      );
+    }
+  } catch (err) {
+    statusEl.textContent = `⚠ Import failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
 });
 // ---------- files surface (multi-document) ----------
 async function refreshDocList(): Promise<void> {
