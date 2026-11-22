@@ -1,9 +1,11 @@
 /**
  * Minimal PDF 1.4 generator (spec §9, Write publishing path §6.1).
- * Deliberate v0 constraints, recorded in ADR-0006:
- * - Courier family only: every glyph advances exactly 600/1000 em, so line
- *   breaking and pagination are exact, not approximated — the §6.4
- *   deterministic-pagination requirement holds truthfully for this font.
+ * v2 (ADR-0006 update): proportional Helvetica output by default, using
+ * verified base-14 AFM widths extracted from a reference implementation
+ * (helvetica-metrics.ts, generated — never hand-typed). Line breaking and
+ * pagination are computed from those exact metrics, so the §6.4
+ * deterministic-pagination requirement still holds truthfully: identical
+ * input produces identical bytes. Courier remains available as an option.
  * - WinAnsi text only; characters outside Latin-1 are replaced with '?' and
  *   reported in the loss report rather than silently mangled.
  * - Uncompressed content streams (verifiable by eye and by tests).
@@ -11,6 +13,7 @@
 
 import { DocModel, Mark } from "../../document-model/src/types";
 import { LossReport, LossWarning } from "../../document-model/src/serialize";
+import { FIRST_CHAR, FONT_WIDTHS } from "./helvetica-metrics";
 
 const PAGE_W = 612; // US Letter, points
 const PAGE_H = 792;
@@ -21,14 +24,49 @@ const H2_SIZE = 15;
 const LINE_FACTOR = 1.45;
 const COURIER_ADVANCE = 0.6; // em — exact for every Courier glyph
 
+export type PdfFontFamily = "helvetica" | "courier";
+
 type FontKey = "R" | "B" | "I" | "BI";
 
-const FONT_NAMES: Record<FontKey, string> = {
-  R: "Courier",
-  B: "Courier-Bold",
-  I: "Courier-Oblique",
-  BI: "Courier-BoldOblique",
+const FONT_NAMES: Record<PdfFontFamily, Record<FontKey, string>> = {
+  helvetica: {
+    R: "Helvetica",
+    B: "Helvetica-Bold",
+    I: "Helvetica-Oblique",
+    BI: "Helvetica-BoldOblique",
+  },
+  courier: {
+    R: "Courier",
+    B: "Courier-Bold",
+    I: "Courier-Oblique",
+    BI: "Courier-BoldOblique",
+  },
 };
+
+const HELVETICA_TABLES: Record<FontKey, number[]> = {
+  R: FONT_WIDTHS.helvetica!,
+  B: FONT_WIDTHS.helveticaBold!,
+  I: FONT_WIDTHS.helveticaOblique!,
+  BI: FONT_WIDTHS.helveticaBoldOblique!,
+};
+
+/** Width of `text` in points, from exact per-family metrics. */
+export function measureText(
+  text: string,
+  font: FontKey,
+  size: number,
+  family: PdfFontFamily
+): number {
+  if (family === "courier") return text.length * size * COURIER_ADVANCE;
+  const table = HELVETICA_TABLES[font];
+  let units = 0;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    const w = table[code - FIRST_CHAR];
+    units += w && w > 0 ? w : 500; // sanitize() keeps codes in-table; 500 is a safe fallback
+  }
+  return (units / 1000) * size;
+}
 
 interface Span {
   text: string;
@@ -69,26 +107,24 @@ function sanitize(text: string, warnings: LossWarning[], blockIndex: number): st
   return out;
 }
 
-/** Deterministic greedy word wrap using exact Courier advances. */
+/** Deterministic greedy word wrap using exact font metrics. */
 function wrapBlock(
   spans: Span[],
   size: number,
-  maxWidth: number
+  maxWidth: number,
+  family: PdfFontFamily
 ): Line[] {
-  const charW = size * COURIER_ADVANCE;
-  const maxChars = Math.max(1, Math.floor(maxWidth / charW));
   const lines: Line[] = [];
   let current: Span[] = [];
-  let count = 0;
+  let used = 0;
 
-  const coalesce = (spans: Span[]): Span[] => {
+  const coalesce = (list: Span[]): Span[] => {
     const out: Span[] = [];
-    for (const s of spans) {
+    for (const s of list) {
       const prev = out[out.length - 1];
       if (prev && prev.font === s.font && prev.underline === s.underline) prev.text += s.text;
       else out.push({ ...s });
     }
-    // trailing whitespace never renders or underlines
     const last = out[out.length - 1];
     if (last) last.text = last.text.replace(/\s+$/, "");
     return out.filter((s) => s.text.length > 0);
@@ -97,39 +133,46 @@ function wrapBlock(
   const pushLine = () => {
     lines.push({ spans: coalesce(current), size });
     current = [];
-    count = 0;
+    used = 0;
   };
 
   for (const span of spans) {
-    // split into word/space tokens, preserving the span's styling
     for (const token of span.text.split(/(\s+)/)) {
       if (token === "") continue;
       const isSpace = /^\s+$/.test(token);
-      if (count + token.length <= maxChars) {
+      const tokenW = measureText(token, span.font, size, family);
+      if (used + tokenW <= maxWidth) {
         current.push({ ...span, text: token });
-        count += token.length;
+        used += tokenW;
         continue;
       }
       if (isSpace) {
         pushLine(); // spaces never start a new line
         continue;
       }
-      if (token.length <= maxChars) {
+      if (tokenW <= maxWidth) {
         pushLine();
         current.push({ ...span, text: token });
-        count = token.length;
+        used = tokenW;
       } else {
-        // hard-break an over-long word
+        // hard-break an over-long word by characters
         let rest = token;
         while (rest.length > 0) {
-          const room = maxChars - count;
-          if (room <= 0) {
+          let take = 0;
+          let w = 0;
+          while (take < rest.length) {
+            const cw = measureText(rest[take]!, span.font, size, family);
+            if (used + w + cw > maxWidth && (take > 0 || current.length > 0 || used > 0)) break;
+            w += cw;
+            take++;
+          }
+          if (take === 0) {
             pushLine();
             continue;
           }
-          current.push({ ...span, text: rest.slice(0, room) });
-          count += Math.min(room, rest.length);
-          rest = rest.slice(room);
+          current.push({ ...span, text: rest.slice(0, take) });
+          used += w;
+          rest = rest.slice(take);
           if (rest.length > 0) pushLine();
         }
       }
@@ -150,7 +193,15 @@ function latin1Bytes(s: string): Uint8Array {
   return out;
 }
 
-export function exportPdf(model: DocModel): { bytes: Uint8Array; report: LossReport } {
+export interface PdfOptions {
+  font?: PdfFontFamily;
+}
+
+export function exportPdf(
+  model: DocModel,
+  options: PdfOptions = {}
+): { bytes: Uint8Array; report: LossReport } {
+  const family: PdfFontFamily = options.font ?? "helvetica";
   const warnings: LossWarning[] = [];
   const maxWidth = PAGE_W - 2 * MARGIN;
 
@@ -175,7 +226,7 @@ export function exportPdf(model: DocModel): { bytes: Uint8Array; report: LossRep
             underline: r.marks.includes("underline"),
           }))
         : [{ text: "", font: forceBold ? "B" : "R", underline: false }];
-    const lines = wrapBlock(spans, size, maxWidth);
+    const lines = wrapBlock(spans, size, maxWidth, family);
     const lineH = size * LINE_FACTOR;
     const spaceBefore = block.type === "paragraph" ? 0 : size * 0.6;
 
@@ -200,7 +251,7 @@ export function exportPdf(model: DocModel): { bytes: Uint8Array; report: LossRep
       let x = MARGIN;
       for (const span of line.spans) {
         if (span.text.length === 0) continue;
-        const w = span.text.length * line.size * COURIER_ADVANCE;
+        const w = measureText(span.text, span.font, line.size, family);
         ops.push(
           `BT /F${span.font} ${line.size} Tf ${x.toFixed(2)} ${ly.toFixed(2)} Td (${pdfEscape(span.text)}) Tj ET`
         );
@@ -227,7 +278,7 @@ export function exportPdf(model: DocModel): { bytes: Uint8Array; report: LossRep
   const fontObjNums: Record<string, number> = {};
   for (const k of fontKeys) {
     fontObjNums[k] = push(
-      `<< /Type /Font /Subtype /Type1 /BaseFont /${FONT_NAMES[k]} /Encoding /WinAnsiEncoding >>`
+      `<< /Type /Font /Subtype /Type1 /BaseFont /${FONT_NAMES[family][k]} /Encoding /WinAnsiEncoding >>`
     );
   }
   const fontDict = fontKeys.map((k) => `/F${k} ${fontObjNums[k]} 0 R`).join(" ");
@@ -285,11 +336,12 @@ export function exportPdf(model: DocModel): { bytes: Uint8Array; report: LossRep
     pos += c.length;
   }
 
-  warnings.push({
-    code: "PDF-FONT-FAMILY",
-    message:
-      "Rendered in Courier (fixed-pitch) for exact deterministic layout; proportional fonts with real metrics are a later work order.",
-    blockIndex: -1,
-  });
-  return { bytes, report: { format: "pdf", lossless: false, warnings } };
+  if (family === "courier") {
+    warnings.push({
+      code: "PDF-FONT-FAMILY",
+      message: "Rendered in Courier (fixed-pitch) as requested.",
+      blockIndex: -1,
+    });
+  }
+  return { bytes, report: { format: "pdf", lossless: warnings.length === 0, warnings } };
 }

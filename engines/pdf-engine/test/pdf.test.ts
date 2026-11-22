@@ -1,10 +1,11 @@
 import { strict as assert } from "node:assert";
 import test from "node:test";
-import { exportPdf } from "../src/pdf";
+import { exportPdf, measureText } from "../src/pdf";
 import { newBlock } from "../../document-model/src/model";
 import { DocModel, SCHEMA_VERSION } from "../../document-model/src/types";
 
 const dec = new TextDecoder("latin1");
+const MEASURE = 612 - 2 * 72; // page width minus margins, points
 
 function sample(): DocModel {
   return {
@@ -21,6 +22,13 @@ function sample(): DocModel {
     ],
   };
 }
+
+test("metrics: verified Helvetica widths are loaded (space 278, A 667/722)", () => {
+  assert.equal(measureText(" ", "R", 1000, "helvetica"), 278);
+  assert.equal(measureText("A", "R", 1000, "helvetica"), 667);
+  assert.equal(measureText("A", "B", 1000, "helvetica"), 722);
+  assert.equal(measureText("x", "R", 1000, "courier"), 600);
+});
 
 test("pdf: header, EOF, and parsable xref with correct object offsets", () => {
   const { bytes } = exportPdf(sample());
@@ -42,13 +50,24 @@ test("pdf: header, EOF, and parsable xref with correct object offsets", () => {
   });
 });
 
+test("pdf: Helvetica is the default; Courier remains available and flagged", () => {
+  const h = exportPdf(sample());
+  const hText = dec.decode(h.bytes);
+  assert.ok(/Helvetica-Bold/.test(hText), "Helvetica family declared");
+  assert.ok(!/Courier/.test(hText), "no Courier in Helvetica output");
+  assert.equal(h.report.lossless, true, "Helvetica Latin-1 export is lossless");
+
+  const c = exportPdf(sample(), { font: "courier" });
+  assert.ok(/Courier-Bold/.test(dec.decode(c.bytes)));
+  assert.ok(c.report.warnings.some((w) => w.code === "PDF-FONT-FAMILY"));
+});
+
 test("pdf: content stream carries the text with escaped parentheses and fonts", () => {
   const { bytes } = exportPdf(sample());
   const text = dec.decode(bytes);
   assert.ok(text.includes("(Engagement Letter)"), "heading text present");
   assert.ok(text.includes("\\(with parens\\)"), "parentheses escaped");
   assert.ok(text.includes("/FB "), "bold font selected for bold run");
-  assert.ok(/Courier-Bold/.test(text), "bold font declared");
   assert.ok(/ l 0\.5 w S/.test(text), "underline drawn as a line");
 });
 
@@ -81,16 +100,23 @@ test("pdf: non-Latin text is replaced and reported, never silently mangled", () 
   assert.equal(report.lossless, false);
 });
 
-test("pdf: over-long words hard-break instead of overflowing the margin", () => {
-  const model: DocModel = {
-    schemaVersion: SCHEMA_VERSION,
-    blocks: [newBlock("paragraph", [{ text: "x".repeat(300), marks: [] }])],
-  };
+test("pdf: no rendered line exceeds the measure (measured wrapping)", () => {
+  const blocks = [
+    newBlock("paragraph", [{ text: "W".repeat(300), marks: [] }]), // widest glyph, hard-break path
+    newBlock("paragraph", [{ text: "mixed width text with WWW and iiii ".repeat(20), marks: ["bold"] }]),
+  ];
+  const model: DocModel = { schemaVersion: SCHEMA_VERSION, blocks };
   const { bytes } = exportPdf(model);
   const text = dec.decode(bytes);
-  const runs = [...text.matchAll(/\((x+)\)/g)].map((m) => m[1]!.length);
-  assert.ok(runs.length > 1, "word was broken across lines");
-  // 11pt Courier: floor(468 / 6.6) = 70 chars per line maximum
-  assert.ok(Math.max(...runs) <= 70, `no line exceeds the measure, max ${Math.max(...runs)}`);
-  assert.equal(runs.reduce((a, b) => a + b, 0), 300, "no characters lost");
+  let totalW = 0;
+  for (const m of text.matchAll(/BT \/F(\w+) (\d+(?:\.\d+)?) Tf (\d+\.\d+) [\d.]+ Td \((.*?)\) Tj ET/g)) {
+    const font = m[1] as "R" | "B" | "I" | "BI";
+    const size = Number(m[2]);
+    const x = Number(m[3]);
+    const run = m[4]!.replace(/\\([\\()])/g, "$1");
+    const end = x - 72 + measureText(run, font, size, "helvetica");
+    assert.ok(end <= MEASURE + 0.01, `line segment ends at ${end.toFixed(1)}pt > measure`);
+    if (run.startsWith("W")) totalW += run.length;
+  }
+  assert.equal(totalW, 300, "no characters lost in hard-break");
 });
