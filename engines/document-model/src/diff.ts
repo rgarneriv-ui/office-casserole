@@ -32,6 +32,7 @@ export interface DiffSummary {
 }
 
 function runsEqual(a: Block, b: Block): boolean {
+  if (JSON.stringify(a.table ?? null) !== JSON.stringify(b.table ?? null)) return false;
   if (a.runs.length !== b.runs.length) return false;
   return a.runs.every(
     (r, i) => r.text === b.runs[i]!.text && marksEqual(r.marks, b.runs[i]!.marks)

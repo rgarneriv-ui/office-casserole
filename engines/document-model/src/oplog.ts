@@ -44,6 +44,16 @@ export type PrimOp =
       prevType: BlockType;
     }
   | { t: "set-block-type"; block: number; before: BlockType; after: BlockType }
+  | {
+      t: "set-table";
+      block: number;
+      beforeType: BlockType;
+      afterType: BlockType;
+      beforeTable: string[][] | null;
+      afterTable: string[][] | null;
+      /** runs the block held before becoming a table (for exact inversion) */
+      beforeRuns: TextRun[];
+    }
   | { t: "replace-model"; before: DocModel; after: DocModel };
 
 export interface OpRecorder {
@@ -102,6 +112,21 @@ export function applyOp(model: DocModel, op: PrimOp): void {
       block.type = op.after;
       break;
     }
+    case "set-table": {
+      const block = model.blocks[op.block];
+      if (!block) throw new Error(`applyOp: no block ${op.block}`);
+      block.type = op.afterType;
+      if (op.afterTable !== null) {
+        block.table = op.afterTable.map((row) => [...row]);
+        block.runs = [];
+      } else {
+        delete block.table;
+        block.runs = op.afterType === op.beforeType && op.beforeTable === null
+          ? block.runs
+          : cloneRuns(op.beforeRuns);
+      }
+      break;
+    }
     case "replace-model": {
       const next = cloneModel(op.after);
       model.schemaVersion = next.schemaVersion;
@@ -144,6 +169,16 @@ export function invertOp(op: PrimOp): PrimOp {
       };
     case "set-block-type":
       return { t: "set-block-type", block: op.block, before: op.after, after: op.before };
+    case "set-table":
+      return {
+        t: "set-table",
+        block: op.block,
+        beforeType: op.afterType,
+        afterType: op.beforeType,
+        beforeTable: op.afterTable,
+        afterTable: op.beforeTable,
+        beforeRuns: op.beforeRuns, // restored when reverting to the non-table side
+      };
     case "replace-model":
       return { t: "replace-model", before: op.after, after: op.before };
   }

@@ -82,6 +82,15 @@ export function validateModel(model: DocModel): string[] {
     if (!b.id) errors.push(`block ${i} missing id`);
     if (seen.has(b.id)) errors.push(`duplicate block id ${b.id}`);
     seen.add(b.id);
+    if (b.type === "table") {
+      if (b.runs.length > 0) errors.push(`block ${i}: table blocks carry no runs`);
+      const t = b.table;
+      if (!t || t.length === 0 || t[0]!.length === 0) errors.push(`block ${i}: empty table`);
+      else if (!t.every((row) => row.length === t[0]!.length && row.every((c) => typeof c === "string")))
+        errors.push(`block ${i}: table is not rectangular`);
+    } else if (b.table !== undefined) {
+      errors.push(`block ${i}: non-table block carries table data`);
+    }
     b.runs.forEach((r, j) => {
       if (r.text.length === 0) errors.push(`block ${i} run ${j} is empty`);
     });

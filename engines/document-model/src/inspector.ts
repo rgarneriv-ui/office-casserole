@@ -41,9 +41,13 @@ export function inspect(model: DocModel): FormatCode[] {
   const codes: FormatCode[] = [];
   model.blocks.forEach((block, bi) => {
     const len = blockText(block).length;
+    const label =
+      block.type === "table" && block.table
+        ? `[Table ${block.table.length}\u00d7${block.table[0]!.length}]`
+        : `[${BLOCK_LABEL[block.type] ?? block.type}]`;
     codes.push({
       kind: "block-start",
-      label: `[${BLOCK_LABEL[block.type] ?? block.type}]`,
+      label,
       blockIndex: bi,
       start: 0,
       end: len,

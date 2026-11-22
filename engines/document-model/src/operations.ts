@@ -245,3 +245,108 @@ export function setBlockType(
     emit(model, { t: "set-block-type", block: b, before: block.type, after: type }, rec);
   }
 }
+
+// ---------- tables (atomic blocks, ADR-0011) ----------
+
+function tableOp(
+  model: DocModel,
+  blockIndex: number,
+  afterType: BlockType,
+  afterTable: string[][] | null,
+  rec?: OpRecorder
+): void {
+  const block = model.blocks[blockIndex];
+  if (!block) throw new Error(`tableOp: no block ${blockIndex}`);
+  emit(
+    model,
+    {
+      t: "set-table",
+      block: blockIndex,
+      beforeType: block.type,
+      afterType,
+      beforeTable: block.table ? block.table.map((r) => [...r]) : null,
+      afterTable,
+      beforeRuns: block.runs.map((r) => ({ text: r.text, marks: [...r.marks] })),
+    },
+    rec
+  );
+}
+
+/** Insert an empty rows×cols table after the caret block; returns the caret
+ *  position (the paragraph created after the table). */
+export function insertTable(
+  model: DocModel,
+  pos: Position,
+  rows: number,
+  cols: number,
+  rec?: OpRecorder
+): Position {
+  const block = model.blocks[pos.block];
+  if (!block) throw new Error(`insertTable: no block ${pos.block}`);
+  const data: string[][] = Array.from({ length: Math.max(1, rows) }, () =>
+    new Array<string>(Math.max(1, cols)).fill("")
+  );
+  const end = blockText(block).length;
+  // split twice at the end: [..block][tableSlot][after]; caret lands on after
+  splitBlock(model, { block: pos.block, offset: end }, rec);
+  splitBlock(model, { block: pos.block + 1, offset: 0 }, rec);
+  tableOp(model, pos.block + 1, "table", data, rec);
+  return { block: pos.block + 2, offset: 0 };
+}
+
+export function setTableCell(
+  model: DocModel,
+  blockIndex: number,
+  row: number,
+  col: number,
+  text: string,
+  rec?: OpRecorder
+): void {
+  const table = model.blocks[blockIndex]?.table;
+  if (!table || !table[row] || col >= table[row]!.length) {
+    throw new Error(`setTableCell: no cell ${row},${col} in block ${blockIndex}`);
+  }
+  if (table[row]![col] === text) return;
+  const next = table.map((r) => [...r]);
+  next[row]![col] = text;
+  tableOp(model, blockIndex, "table", next, rec);
+}
+
+export type TableEdit = "add-row" | "remove-row" | "add-col" | "remove-col";
+
+export function editTable(
+  model: DocModel,
+  blockIndex: number,
+  edit: TableEdit,
+  rec?: OpRecorder
+): void {
+  const table = model.blocks[blockIndex]?.table;
+  if (!table) throw new Error(`editTable: block ${blockIndex} is not a table`);
+  let next = table.map((r) => [...r]);
+  if (edit === "add-row") next.push(new Array<string>(next[0]!.length).fill(""));
+  else if (edit === "remove-row" && next.length > 1) next = next.slice(0, -1);
+  else if (edit === "add-col") next = next.map((r) => [...r, ""]);
+  else if (edit === "remove-col" && next[0]!.length > 1) next = next.map((r) => r.slice(0, -1));
+  else return; // removing the last row/col is a no-op, not a crash
+  tableOp(model, blockIndex, "table", next, rec);
+}
+
+/** Convert a table back to an empty paragraph (content intentionally dropped —
+ *  callers confirm with the user first). */
+export function removeTable(model: DocModel, blockIndex: number, rec?: OpRecorder): void {
+  const block = model.blocks[blockIndex];
+  if (!block?.table) return;
+  emit(
+    model,
+    {
+      t: "set-table",
+      block: blockIndex,
+      beforeType: "table",
+      afterType: "paragraph",
+      beforeTable: block.table.map((r) => [...r]),
+      afterTable: null,
+      beforeRuns: [],
+    },
+    rec
+  );
+}

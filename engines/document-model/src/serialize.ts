@@ -74,6 +74,14 @@ export function toHTML(model: DocModel): string {
     }
   };
   for (const block of model.blocks) {
+    if (block.type === "table" && block.table) {
+      closeList();
+      const rows = block.table
+        .map((row) => `<tr>${row.map((c) => `<td>${escapeHtml(c)}</td>`).join("")}</tr>`)
+        .join("\n");
+      parts.push(`<table border="1" cellspacing="0" cellpadding="4">\n${rows}\n</table>`);
+      continue;
+    }
     if (block.type === "bullet" || block.type === "numbered") {
       const want = block.type === "bullet" ? "ul" : "ol";
       if (openList !== want) {
@@ -101,6 +109,24 @@ export function toMarkdown(model: DocModel): { markdown: string; report: LossRep
   const lines: string[] = [];
   let counter = 0;
   model.blocks.forEach((block, bi) => {
+    if (block.type === "table" && block.table) {
+      counter = 0;
+      const esc = (c: string) => {
+        if (c.includes("\n")) {
+          warnings.push({
+            code: "MD-TABLE-MULTILINE",
+            message: "Multi-line table cells flattened to one line in Markdown.",
+            blockIndex: bi,
+          });
+        }
+        return c.replace(/\n/g, " ").replace(/\|/g, "\\|");
+      };
+      const t = block.table;
+      const line = (row: string[]) => `| ${row.map(esc).join(" | ")} |`;
+      const md = [line(t[0]!), `|${t[0]!.map(() => " --- ").join("|")}|`, ...t.slice(1).map(line)];
+      lines.push(md.join("\n"));
+      return;
+    }
     if (block.type === "numbered") counter += 1;
     else counter = 0;
     const prefix =

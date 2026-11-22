@@ -106,14 +106,14 @@ test("docx: import reports unsupported content instead of claiming fidelity", as
   assert.equal(report.lossless, false);
   const codes = report.warnings.map((w) => w.code);
   assert.ok(codes.includes("DOCX-IMPORT-HEADING-LEVEL"));
-  assert.ok(codes.includes("DOCX-IMPORT-TABLE"));
   assert.ok(codes.includes("DOCX-IMPORT-RUN-PROP"));
   assert.ok(codes.includes("DOCX-IMPORT-RUN-CONTENT"));
-  // content was kept, not dropped
+  // content was kept, not dropped — table content now lands in a table block
   const text = model.blocks.map((b) => b.runs.map((r) => r.text).join("")).join("\n");
   assert.ok(text.includes("Deep heading"));
-  assert.ok(text.includes("cell text"));
   assert.ok(text.includes("highlighted"));
+  const tbl = model.blocks.find((b) => b.type === "table");
+  assert.ok(tbl && tbl.table![0]![0] === "cell text", "table imported as a table block");
   assert.equal(model.blocks[0]!.type, "heading2");
 });
 
@@ -169,4 +169,45 @@ test("docx: numPr without resolvable numbering imports as numbered with a warnin
   const codes = report.warnings.map((w) => w.code);
   assert.ok(codes.includes("DOCX-IMPORT-NUMBERING"));
   assert.ok(codes.includes("DOCX-IMPORT-LIST-LEVEL"));
+});
+
+test("docx: tables export as w:tbl and round-trip as table blocks", async () => {
+  const d: DocModel = { schemaVersion: SCHEMA_VERSION, blocks: [newBlock("paragraph", [{ text: "Intro", marks: [] }])] };
+  const tbl = newBlock("table");
+  tbl.table = [["Name", "Rate"], ["Rob", "$450"], ["Multi\nline", ""]];
+  d.blocks.push(tbl);
+  const { bytes, report } = await exportDocx(d);
+  assert.equal(report.lossless, true);
+  const entries = await zipRead(bytes);
+  const docXml = new TextDecoder().decode(entries.find((e) => e.name === "word/document.xml")!.data);
+  assert.ok(docXml.includes("<w:tbl>"));
+  assert.ok(docXml.includes("<w:gridCol"));
+  assert.ok((docXml.match(/<w:tr>/g) ?? []).length === 3, "three rows");
+
+  const { model, report: imp } = await importDocx(bytes, parseXml);
+  assert.equal(imp.lossless, true, JSON.stringify(imp.warnings));
+  const back = model.blocks.find((b) => b.type === "table")!;
+  assert.deepEqual(back.table, [["Name", "Rate"], ["Rob", "$450"], ["Multi\nline", ""]]);
+});
+
+test("docx: foreign tables with spans/formatting import with warnings, not flattening", async () => {
+  const docXml =
+    `<?xml version="1.0"?>` +
+    `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>` +
+    `<w:tbl><w:tr>` +
+    `<w:tc><w:tcPr><w:gridSpan w:val="2"/></w:tcPr><w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Spanning bold</w:t></w:r></w:p></w:tc>` +
+    `</w:tr><w:tr>` +
+    `<w:tc><w:p><w:r><w:t>a</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>b</w:t></w:r></w:p></w:tc>` +
+    `</w:tr></w:tbl>` +
+    `<w:sectPr/></w:body></w:document>`;
+  const bytes = await zipWrite([
+    { name: "[Content_Types].xml", data: new TextEncoder().encode("<Types/>") },
+    { name: "word/document.xml", data: new TextEncoder().encode(docXml) },
+  ]);
+  const { model, report } = await importDocx(bytes, parseXml);
+  const tbl = model.blocks.find((b) => b.type === "table")!;
+  assert.deepEqual(tbl.table, [["Spanning bold", ""], ["a", "b"]], "ragged rows padded rectangular");
+  const codes = report.warnings.map((w) => w.code);
+  assert.ok(codes.includes("DOCX-IMPORT-TABLE-SPAN"));
+  assert.ok(codes.includes("DOCX-IMPORT-TABLE-FORMATTING"));
 });

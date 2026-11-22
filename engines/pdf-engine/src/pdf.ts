@@ -218,7 +218,34 @@ export function exportPdf(
 
   const LIST_INDENT = 22; // points
   let listCounter = 0;
+  let tableNoted = false;
   model.blocks.forEach((block, bi) => {
+    if (block.type === "table" && block.table) {
+      if (!tableNoted) {
+        warnings.push({
+          code: "PDF-TABLE-SIMPLIFIED",
+          message: "Tables render as text rows separated by | (no grid lines yet).",
+          blockIndex: bi,
+        });
+        tableNoted = true;
+      }
+      const lineH = BODY_SIZE * LINE_FACTOR;
+      for (const row of block.table) {
+        const rowText = sanitize(row.join("  |  ").replace(/\n/g, " "), warnings, bi);
+        const lines = wrapBlock([{ text: rowText, font: "R", underline: false }], BODY_SIZE, maxWidth, family);
+        for (const line of lines) {
+          if (y - lineH < MARGIN) {
+            pages.push(page);
+            page = [];
+            y = PAGE_H - MARGIN;
+          }
+          y -= lineH;
+          page.push({ line, y });
+        }
+      }
+      y -= BODY_SIZE * 0.5;
+      return;
+    }
     const isList = block.type === "bullet" || block.type === "numbered";
     if (block.type === "numbered") listCounter += 1;
     else listCounter = 0;

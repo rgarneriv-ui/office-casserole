@@ -33,6 +33,7 @@ const STYLE_ID: Record<BlockType, string | null> = {
   heading2: "Heading2",
   bullet: null,
   numbered: null,
+  table: null,
 };
 
 /** numId 1 = bullet list, numId 2 = decimal list (see NUMBERING_XML). */
@@ -76,11 +77,43 @@ const NUMBERING_XML =
   `</w:numbering>`;
 
 
+function tableXml(table: string[][]): string {
+  const colW = Math.floor(9360 / table[0]!.length); // dxa across a 6.5in text width
+  const borders =
+    `<w:tblBorders>` +
+    ["top", "left", "bottom", "right", "insideH", "insideV"]
+      .map((side) => `<w:${side} w:val="single" w:sz="4" w:color="auto"/>`)
+      .join("") +
+    `</w:tblBorders>`;
+  const grid = `<w:tblGrid>${table[0]!.map(() => `<w:gridCol w:w="${colW}"/>`).join("")}</w:tblGrid>`;
+  const rows = table
+    .map(
+      (row) =>
+        `<w:tr>` +
+        row
+          .map(
+            (cell) =>
+              `<w:tc><w:tcPr><w:tcW w:w="${colW}" w:type="dxa"/></w:tcPr>` +
+              cell
+                .split("\n")
+                .map((line) => `<w:p><w:r><w:t xml:space="preserve">${xmlEscape(line)}</w:t></w:r></w:p>`)
+                .join("") +
+              `</w:tc>`
+          )
+          .join("") +
+        `</w:tr>`
+    )
+    .join("");
+  return `<w:tbl><w:tblPr>${borders}</w:tblPr>${grid}${rows}</w:tbl>`;
+}
+
 function documentXml(model: DocModel): string {
   return (
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
     `<w:document xmlns:w="${W_NS}"><w:body>` +
-    model.blocks.map(paragraphXml).join("") +
+    model.blocks
+      .map((b) => (b.type === "table" && b.table ? tableXml(b.table) : paragraphXml(b)))
+      .join("") +
     `<w:sectPr/></w:body></w:document>`
   );
 }
@@ -235,15 +268,33 @@ export async function importDocx(
     const bi = model.blocks.length;
     if (el.localName === "sectPr") continue;
     if (el.localName === "tbl") {
-      warnings.push({
-        code: "DOCX-IMPORT-TABLE",
-        message: "Tables are not yet supported; table content imported as plain paragraphs.",
-        blockIndex: bi,
-      });
-      // flatten table cell paragraphs so content is not silently dropped
-      for (const p of descendantsByLocalName(el, "p")) {
-        model.blocks.push(importParagraph(p, model.blocks.length, warnings, numFmtById));
+      const data: string[][] = [];
+      let spanSeen = false;
+      let marksSeen = false;
+      for (const tr of descendantsByLocalName(el, "tr")) {
+        const row: string[] = [];
+        for (const tc of childrenByLocalName(tr, "tc")) {
+          const texts = descendantsByLocalName(tc, "p").map((p) =>
+            descendantsByLocalName(p, "t").map((t) => t.textContent ?? "").join("")
+          );
+          row.push(texts.join("\n"));
+          if (descendantsByLocalName(tc, "gridSpan").length > 0 || descendantsByLocalName(tc, "vMerge").length > 0) spanSeen = true;
+          for (const rPr of descendantsByLocalName(tc, "rPr")) {
+            if (childrenByLocalName(rPr, "b").length || childrenByLocalName(rPr, "i").length || childrenByLocalName(rPr, "u").length) marksSeen = true;
+          }
+        }
+        if (row.length > 0) data.push(row);
       }
+      if (data.length === 0) continue;
+      const cols = Math.max(...data.map((r) => r.length));
+      for (const row of data) while (row.length < cols) row.push("");
+      const tableBlock = newBlock("table");
+      tableBlock.table = data;
+      model.blocks.push(tableBlock);
+      if (spanSeen)
+        warnings.push({ code: "DOCX-IMPORT-TABLE-SPAN", message: "Merged table cells flattened (spans not yet supported).", blockIndex: bi });
+      if (marksSeen)
+        warnings.push({ code: "DOCX-IMPORT-TABLE-FORMATTING", message: "Character formatting inside table cells was dropped (cells are plain text).", blockIndex: bi });
       continue;
     }
     if (el.localName !== "p") {

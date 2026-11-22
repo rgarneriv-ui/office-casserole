@@ -9,6 +9,11 @@
 import {
   Block,
   DocModel,
+  TableEdit,
+  editTable,
+  insertTable,
+  removeTable,
+  setTableCell,
   DocRange,
   TransactionLog,
   applyOp,
@@ -51,6 +56,7 @@ const BLOCK_TAG: Record<string, string> = { paragraph: "p", heading1: "h1", head
 let model: DocModel = newDocument();
 let selection: DocRange = { anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 0 } };
 let caretMarks: Mark[] | null = null; // pending marks for a collapsed caret
+let activeTableBlock: number | null = null;
 const log = new TransactionLog();
 
 // ---------- authorship + journal (§14.1, live wiring per ADR-0010) ----------
@@ -224,6 +230,30 @@ function writeSelection(): void {
 
 // ---------- rendering ----------
 function renderBlock(block: Block, index: number): string {
+  if (block.type === "table" && block.table) {
+    const rows = block.table
+      .map(
+        (row, r) =>
+          `<tr>${row
+            .map(
+              (cell, c) =>
+                `<td data-r="${r}" data-c="${c}">${cell
+                  .replace(/&/g, "&amp;")
+                  .replace(/</g, "&lt;")
+                  .replace(/\n/g, "<br>") || "&nbsp;"}</td>`
+            )
+            .join("")}</tr>`
+      )
+      .join("");
+    const controls =
+      activeTableBlock === index
+        ? `<div class="tbl-controls" contenteditable="false">` +
+          `<button data-tedit="add-row">+ Row</button><button data-tedit="remove-row">− Row</button>` +
+          `<button data-tedit="add-col">+ Col</button><button data-tedit="remove-col">− Col</button>` +
+          `<button data-tedit="delete">✕ Table</button></div>`
+        : "";
+    return `<div class="tbl-wrap" contenteditable="false" data-block="${index}"><table class="cas-table">${rows}</table>${controls}</div>`;
+  }
   const tag = BLOCK_TAG[block.type] ?? "p";
   const listCls =
     block.type === "bullet" ? ' class="li-bullet"' : block.type === "numbered" ? ' class="li-numbered"' : "";
@@ -344,6 +374,7 @@ function updateExplain(): void {
 
 // ---------- command dispatch (§18.2) ----------
 type CommandId =
+  | "insertTable"
   | "insertText"
   | "deleteBackward"
   | "deleteSelection"
@@ -445,6 +476,14 @@ function dispatch(id: CommandId, payload?: unknown): void {
       toggleMark(model, selection, mark, log);
       break;
     }
+    case "insertTable": {
+      const cur = model.blocks[selection.focus.block];
+      if (cur?.type === "table") break; // no tables inside tables in v0
+      const caret = insertTable(model, selection.focus, 3, 3, log);
+      selection = { anchor: caret, focus: caret };
+      activeTableBlock = caret.block - 1;
+      break;
+    }
     case "setBlockType": {
       setBlockType(model, selection, payload as Block["type"], log);
       break;
@@ -534,6 +573,7 @@ document.addEventListener("selectionchange", () => {
     dispatch("toggleMark", m);
   });
 });
+document.getElementById("btn-table")?.addEventListener("click", () => dispatch("insertTable"));
 document.getElementById("block-type")?.addEventListener("change", (e) => {
   dispatch("setBlockType", (e.target as HTMLSelectElement).value);
   editor.focus();
@@ -938,6 +978,109 @@ document.getElementById("btn-rev-close")?.addEventListener("click", () => {
   if (revPanel) revPanel.hidden = true;
 });
 
+// ---------- tables: cell editing + structure controls ----------
+let cellInput: HTMLInputElement | null = null;
+
+function closeCellInput(commit: boolean): void {
+  if (!cellInput) return;
+  const input = cellInput;
+  cellInput = null;
+  const bi = Number(input.dataset.bi);
+  const r = Number(input.dataset.r);
+  const c = Number(input.dataset.c);
+  const value = input.value;
+  input.remove();
+  if (commit) {
+    const table = model.blocks[bi]?.table;
+    if (table && table[r]?.[c] !== undefined && table[r]![c] !== value) {
+      log.begin();
+      setTableCell(model, bi, r, c, value, log);
+      scheduleSave();
+    }
+  }
+  render();
+}
+
+function openCellInput(bi: number, r: number, c: number, td: HTMLElement): void {
+  closeCellInput(true);
+  const rect = td.getBoundingClientRect();
+  const host = editor.getBoundingClientRect();
+  const input = document.createElement("input");
+  input.className = "cell-input";
+  input.value = model.blocks[bi]?.table?.[r]?.[c] ?? "";
+  input.dataset.bi = String(bi);
+  input.dataset.r = String(r);
+  input.dataset.c = String(c);
+  input.style.left = `${rect.left - host.left}px`;
+  input.style.top = `${rect.top - host.top}px`;
+  input.style.width = `${Math.max(60, rect.width)}px`;
+  input.style.height = `${rect.height}px`;
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Escape") closeCellInput(false);
+    else if (e.key === "Enter") closeCellInput(true);
+    else if (e.key === "Tab") {
+      e.preventDefault();
+      const table = model.blocks[bi]?.table;
+      closeCellInput(true);
+      if (table) {
+        const nc = c + 1 < table[0]!.length ? c + 1 : 0;
+        const nr = nc === 0 ? (r + 1) % table.length : r;
+        const next = editor.querySelector(
+          `[data-block="${bi}"] td[data-r="${nr}"][data-c="${nc}"]`
+        ) as HTMLElement | null;
+        if (next) openCellInput(bi, nr, nc, next);
+      }
+    }
+  });
+  input.addEventListener("blur", () => closeCellInput(true));
+  editor.style.position = "relative";
+  editor.appendChild(input);
+  cellInput = input;
+  input.focus();
+  input.select();
+}
+
+editor.addEventListener("click", (e) => {
+  const td = (e.target as HTMLElement).closest("td[data-r]") as HTMLElement | null;
+  const wrap = (e.target as HTMLElement).closest(".tbl-wrap") as HTMLElement | null;
+  const btn = (e.target as HTMLElement).closest("[data-tedit]") as HTMLButtonElement | null;
+  if (btn && wrap) {
+    const bi = Number(wrap.dataset.block);
+    const action = btn.dataset.tedit!;
+    if (action === "delete") {
+      if (!window.confirm("Delete this table and its contents?")) return;
+      log.begin();
+      removeTable(model, bi, log);
+      activeTableBlock = null;
+    } else {
+      log.begin();
+      editTable(model, bi, action as TableEdit, log);
+    }
+    render();
+    scheduleSave();
+    return;
+  }
+  if (td && wrap) {
+    const bi = Number(wrap.dataset.block);
+    if (activeTableBlock !== bi) {
+      activeTableBlock = bi;
+      render();
+      const again = editor.querySelector(
+        `[data-block="${bi}"] td[data-r="${td.dataset.r}"][data-c="${td.dataset.c}"]`
+      ) as HTMLElement | null;
+      if (again) openCellInput(bi, Number(td.dataset.r), Number(td.dataset.c), again);
+      return;
+    }
+    openCellInput(bi, Number(td.dataset.r), Number(td.dataset.c), td);
+    return;
+  }
+  if (activeTableBlock !== null && !wrap) {
+    activeTableBlock = null;
+    render();
+  }
+});
+
 // ---------- command registry + palette (§18.2) ----------
 // One canonical implementation per command: editing commands run through
 // dispatch; file/export commands run through their single wired control, so
@@ -993,6 +1136,12 @@ const COMMANDS: CommandDefinition[] = [
     isPermitted: () => true, isAvailable: () => log.canRedo(), undoable: false,
     shortcut: "Ctrl/Cmd-Y", auditClassification: "document-modification",
     run: () => dispatch("redo"),
+  },
+  {
+    id: "insert.table", name: "Insert table", description: "Insert a 3\u00d73 table after the caret",
+    isPermitted: () => true, isAvailable: () => model.blocks[selection.focus.block]?.type !== "table",
+    undoable: true, auditClassification: "document-modification",
+    run: () => dispatch("insertTable"),
   },
   {
     id: "files.new", name: "New document", description: "Create a new document",

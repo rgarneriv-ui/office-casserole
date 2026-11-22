@@ -130,5 +130,7 @@ files saved by actual Office applications are the ones that matter most.
    Remaining: revisions as log checkpoints (ADR-0008).
 3. Intra-block (run-level) diff; review branches and semantic merge (§14.2
    top layer); migrate Slides deck undo to the op-log pattern.
-4. Full command-registry inversion; palettes for Sheets/Slides; font
+4. Rich table cells (ADR-0011 migration), spans, PDF table grids; nested
+   list levels.
+5. Full command-registry inversion; palettes for Sheets/Slides; font
    embedding/subsetting for non-Latin PDF output.

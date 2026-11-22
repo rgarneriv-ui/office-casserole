@@ -6,7 +6,7 @@
 
 export type Mark = "bold" | "italic" | "underline";
 
-export type BlockType = "paragraph" | "heading1" | "heading2" | "bullet" | "numbered";
+export type BlockType = "paragraph" | "heading1" | "heading2" | "bullet" | "numbered" | "table";
 
 /** A contiguous span of text with a uniform mark set. */
 export interface TextRun {
@@ -19,6 +19,10 @@ export interface Block {
   id: string;
   type: BlockType;
   runs: TextRun[];
+  /** Present exactly when type === "table": rows of plain-text cells
+   *  (rectangular). Tables are atomic blocks (ADR-0011): edited through
+   *  dedicated set-table operations, not the caret system. */
+  table?: string[][];
 }
 
 export interface DocModel {

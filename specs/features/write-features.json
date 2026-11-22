@@ -635,5 +635,121 @@
       "No network relay, presence, or conflict UX yet",
       "Actor identity is a local pseudonymous id (no accounts)"
     ]
+  },
+  {
+    "id": "WRITE-EDIT-003",
+    "application": "casserole-write",
+    "name": "Bulleted and numbered lists",
+    "priority": "P0",
+    "description": "List block types through the full pipeline: editing with list continuation and empty-item exit, Reveal Codes, HTML ul/ol, Markdown, OOXML numbering in DOCX both ways, PDF hanging-indent prefixes.",
+    "baseline": {
+      "product": "Microsoft Word",
+      "capability": "Basic bulleted/numbered lists",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
+    "owner": "engines/document-model",
+    "dependencies": [
+      "WRITE-EDIT-001"
+    ],
+    "commands": [
+      "block.bullet",
+      "block.numbered"
+    ],
+    "offlineSupport": "fully offline",
+    "edgeCases": [
+      "numbering restarts after interruptions",
+      "nested DOCX levels flatten with warning",
+      "unresolvable numbering falls back with warning"
+    ],
+    "acceptance": [
+      "Enter continues the list; empty-item Enter exits",
+      "DOCX round-trip preserves bullet vs numbered via numbering.xml",
+      "python-docx reads exported lists as List Paragraph with numPr"
+    ],
+    "verification": {
+      "required": [
+        "unit",
+        "compatibility"
+      ]
+    },
+    "status": "tested",
+    "evidence": [
+      {
+        "kind": "test-run",
+        "ref": "lists.test.ts + docx list suites: pass",
+        "date": "2026-11-22"
+      },
+      {
+        "kind": "report",
+        "ref": "python-docx cross-validation of list export",
+        "date": "2026-11-22"
+      }
+    ],
+    "knownLimitations": [
+      "Single list level (no nesting yet)"
+    ]
+  },
+  {
+    "id": "WRITE-EDIT-004",
+    "application": "casserole-write",
+    "name": "Tables (atomic blocks)",
+    "priority": "P0",
+    "description": "Insert/edit/delete tables as atomic blocks: click-to-edit cells with Tab navigation, row/col controls, invertible journaled set-table operations with OT conflict semantics; HTML/MD/DOCX w:tbl round-trip, simplified PDF rendering with loss note.",
+    "baseline": {
+      "product": "Microsoft Word",
+      "capability": "Basic tables",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
+    "owner": "engines/document-model + apps/write",
+    "dependencies": [
+      "WRITE-EDIT-002"
+    ],
+    "commands": [
+      "insert.table",
+      "table.setCell",
+      "table.addRow",
+      "table.addCol",
+      "table.removeRow",
+      "table.removeCol",
+      "table.delete"
+    ],
+    "offlineSupport": "fully offline",
+    "edgeCases": [
+      "one undo removes a whole insertion",
+      "last row/col removal refused quietly",
+      "ragged DOCX rows padded rectangular",
+      "diverging concurrent conversions conflict"
+    ],
+    "acceptance": [
+      "All table operations keep validateModel empty and invert exactly",
+      "DOCX export/import round-trips cell data; spans/formatting warn",
+      "Smoke: palette insert, cell edit commit, undo restores block count"
+    ],
+    "verification": {
+      "required": [
+        "unit",
+        "end-to-end",
+        "compatibility"
+      ]
+    },
+    "status": "tested",
+    "evidence": [
+      {
+        "kind": "test-run",
+        "ref": "tables.test.ts (7 suites) + docx table suites: pass",
+        "date": "2026-11-22"
+      },
+      {
+        "kind": "test-run",
+        "ref": "smoke-write.mjs scenario 6: pass",
+        "date": "2026-11-22"
+      }
+    ],
+    "knownLimitations": [
+      "Plain-text cells (no per-cell formatting or nested blocks — ADR-0011 migration recorded)",
+      "No spans, column widths, or PDF grid drawing yet"
+    ]
   }
 ]

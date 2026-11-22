@@ -58,6 +58,8 @@ export function transformOp(b: PrimOp, a: PrimOp, bias: Bias): TransformResult {
       return transformMG(b, a);
     case "set-block-type":
       return transformST(b, a);
+    case "set-table":
+      return transformTB(b, a);
   }
 }
 
@@ -65,6 +67,34 @@ type RR = Extract<PrimOp, { t: "replace-runs" }>;
 type SP = Extract<PrimOp, { t: "split-block" }>;
 type MG = Extract<PrimOp, { t: "merge-blocks" }>;
 type ST = Extract<PrimOp, { t: "set-block-type" }>;
+type TB = Extract<PrimOp, { t: "set-table" }>;
+
+function transformTB(b: TB, a: Exclude<PrimOp, { t: "replace-model" }>): TransformResult {
+  switch (a.t) {
+    case "replace-runs":
+      if (a.block === b.block) return conflict(`block ${b.block} was edited and concurrently converted to/from a table`);
+      return ok(b);
+    case "split-block":
+      if (a.block === b.block) return conflict(`block ${b.block} was split and concurrently converted to/from a table`);
+      if (b.block > a.block) return ok({ ...b, block: b.block + 1 });
+      return ok(b);
+    case "merge-blocks":
+      if (a.block === b.block || a.block === b.block + 1)
+        return conflict(`block ${b.block} was merged and concurrently converted to/from a table`);
+      if (b.block > a.block) return ok({ ...b, block: b.block - 1 });
+      return ok(b);
+    case "set-block-type":
+      if (a.block === b.block) return conflict(`block ${b.block} was retyped and concurrently table-converted`);
+      return ok(b);
+    case "set-table":
+      if (a.block === b.block) {
+        return JSON.stringify(a) === JSON.stringify(b)
+          ? ok(b)
+          : conflict(`block ${b.block} received diverging table conversions`);
+      }
+      return ok(b);
+  }
+}
 
 function transformRR(b: RR, a: Exclude<PrimOp, { t: "replace-model" }>, bias: Bias): TransformResult {
   switch (a.t) {
@@ -118,6 +148,9 @@ function transformRR(b: RR, a: Exclude<PrimOp, { t: "replace-model" }>, bias: Bi
     }
     case "set-block-type":
       return ok(b);
+    case "set-table":
+      if (a.block === b.block) return conflict(`block ${b.block} was concurrently converted to/from a table`);
+      return ok(b);
   }
 }
 
@@ -152,6 +185,9 @@ function transformSP(b: SP, a: Exclude<PrimOp, { t: "replace-model" }>): Transfo
       return ok({ ...b, block: a.block - 1, offset: b.offset + a.seam });
     }
     case "set-block-type":
+      return ok(b);
+    case "set-table":
+      if (a.block === b.block) return conflict(`block ${b.block} was concurrently converted to/from a table`);
       return ok(b);
   }
 }
@@ -193,6 +229,10 @@ function transformMG(b: MG, a: Exclude<PrimOp, { t: "replace-model" }>): Transfo
     }
     case "set-block-type":
       return ok(b);
+    case "set-table":
+      if (a.block === b.block || a.block === b.block - 1)
+        return conflict(`merge touches block ${a.block}, concurrently converted to/from a table`);
+      return ok(b);
   }
 }
 
@@ -219,6 +259,9 @@ function transformST(b: ST, a: Exclude<PrimOp, { t: "replace-model" }>): Transfo
       }
       return ok(b);
     }
+    case "set-table":
+      if (a.block === b.block) return conflict(`block ${b.block} was concurrently converted to/from a table`);
+      return ok(b);
   }
 }
 

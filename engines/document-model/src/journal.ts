@@ -55,7 +55,7 @@ function isRuns(v: unknown): v is TextRun[] {
   );
 }
 
-const BLOCK_TYPES = ["paragraph", "heading1", "heading2", "bullet", "numbered"];
+const BLOCK_TYPES = ["paragraph", "heading1", "heading2", "bullet", "numbered", "table"];
 
 export function validatePrimOp(op: unknown): string[] {
   const errors: string[] = [];
@@ -81,6 +81,20 @@ export function validatePrimOp(op: unknown): string[] {
       if (!BLOCK_TYPES.includes(o.removedType as string) || !BLOCK_TYPES.includes(o.prevType as string))
         errors.push("merge-blocks: bad type");
       break;
+    case "set-table": {
+      if (!Number.isInteger(o.block)) errors.push("set-table: bad block");
+      for (const side of ["beforeType", "afterType"] as const) {
+        if (!BLOCK_TYPES.includes(o[side] as string)) errors.push(`set-table: bad ${side}`);
+      }
+      for (const side of ["beforeTable", "afterTable"] as const) {
+        const t = o[side];
+        if (t !== null && (!Array.isArray(t) || !(t as unknown[]).every((r) => Array.isArray(r) && (r as unknown[]).every((c) => typeof c === "string"))))
+          errors.push(`set-table: bad ${side}`);
+      }
+      if ((o.afterType === "table") !== (o.afterTable !== null)) errors.push("set-table: afterType/afterTable mismatch");
+      if ((o.beforeType === "table") !== (o.beforeTable !== null)) errors.push("set-table: beforeType/beforeTable mismatch");
+      break;
+    }
     case "set-block-type":
       if (!Number.isInteger(o.block)) errors.push("set-block-type: bad block");
       if (!BLOCK_TYPES.includes(o.before as string) || !BLOCK_TYPES.includes(o.after as string))

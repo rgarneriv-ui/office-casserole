@@ -135,3 +135,40 @@ console.log("SMOKE OK — revisions save/compare/restore");
   assert(jdata.entries.every(e => e.actorId === actor), "every entry carries the actor");
 }
 console.log("SMOKE OK — live journal + authorship");
+
+// Scenario 6: tables — insert via palette, edit a cell, undo removes whole insertion
+{
+  const dom = await bootDom();
+  const doc = dom.window.document;
+  const blocksBefore = doc.querySelectorAll("#editor [data-block]").length;
+  doc.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true, cancelable: true }));
+  const input = doc.getElementById("pal-input");
+  input.value = "insert table";
+  input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await new Promise(r => setTimeout(r, 100));
+  const table = doc.querySelector("#editor .cas-table");
+  assert(table, "table rendered");
+  assert(table.querySelectorAll("td").length === 9, "3x3 cells");
+
+  // click a cell twice (first activates, then opens the input), type, commit
+  let td = table.querySelector('td[data-r="0"][data-c="0"]');
+  td.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  td = doc.querySelector('#editor td[data-r="0"][data-c="0"]');
+  td.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  const cell = doc.querySelector("#editor .cell-input");
+  assert(cell, "cell editor opened");
+  cell.value = "Fee";
+  cell.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await new Promise(r => setTimeout(r, 50));
+  assert(doc.querySelector('#editor td[data-r="0"][data-c="0"]').textContent === "Fee", "cell committed");
+  assert(doc.querySelector("#editor .tbl-controls"), "table controls visible when active");
+
+  // undo cell edit, then undo the insertion (one step) — table gone
+  doc.getElementById("btn-undo").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  doc.getElementById("btn-undo").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  await new Promise(r => setTimeout(r, 50));
+  assert(!doc.querySelector("#editor .cas-table"), "undo removed the table");
+  assert(doc.querySelectorAll("#editor [data-block]").length === blocksBefore, "block count restored");
+}
+console.log("SMOKE OK — tables insert/edit/undo");
