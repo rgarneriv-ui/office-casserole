@@ -33,6 +33,7 @@
   .el { position: absolute; }
   .el.text .t { width: 100%; height: 100%; overflow: hidden; line-height: 1.25; white-space: pre-wrap; }
   .el.rect { border-radius: 4px; }
+  .el.image img { width: 100%; height: 100%; object-fit: fill; display: block; pointer-events: none; }
   #canvas .el { cursor: move; }
   #canvas .el.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
   .handle { position: absolute; right: -7px; bottom: -7px; width: 12px; height: 12px;
@@ -60,6 +61,8 @@
     <button id="btn-del-slide" title="Delete slide">− Slide</button>
     <button id="btn-add-text" title="Add text box">+ Text</button>
     <button id="btn-add-rect" title="Add box">+ Box</button>
+    <button id="btn-add-image" title="Insert image from file">+ Image</button>
+    <input id="image-open" type="file" accept="image/png,image/jpeg,image/gif" style="display:none" />
     <button id="btn-del-el" title="Delete selected element (Del)">Delete el.</button>
     <button id="btn-undo" title="Undo (Ctrl/Cmd-Z)">↶</button>
     <button id="btn-redo" title="Redo (Ctrl/Cmd-Y)">↷</button>

@@ -162,5 +162,59 @@
     "knownLimitations": [
       "No animations/media; mixed per-run styling flattened on import; layout-inherited placeholder geometry not resolved; opening in real PowerPoint not yet verified"
     ]
+  },
+  {
+    "id": "SLIDES-MEDIA-001",
+    "application": "casserole-slides",
+    "name": "Image elements with PPTX embedding",
+    "priority": "P1",
+    "description": "Insert images from file (stored as data URLs, decks stay self-contained); drag/resize like any element; PPTX export embeds real media parts with per-slide relationships, import converts pictures back to image elements with exact bytes; missing media degrades to a placeholder with a warning.",
+    "baseline": {
+      "product": "Microsoft PowerPoint",
+      "capability": "Basic picture insertion",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
+    "owner": "engines/presentation-model + format-conversion + apps/slides",
+    "dependencies": [
+      "SLIDES-MODEL-001",
+      "SLIDES-CONV-001"
+    ],
+    "commands": [
+      "insert.image"
+    ],
+    "offlineSupport": "fully offline",
+    "edgeCases": [
+      "png/jpeg/gif only",
+      "missing media part imports as placeholder rect with warning",
+      "unembeddable src exports as placeholder"
+    ],
+    "acceptance": [
+      "Export→import round-trips media bytes exactly and preserves geometry",
+      "python-pptx sees a PICTURE shape with identical blob",
+      "validateDeck rejects image elements without data:image src"
+    ],
+    "verification": {
+      "required": [
+        "unit",
+        "compatibility"
+      ]
+    },
+    "status": "tested",
+    "evidence": [
+      {
+        "kind": "test-run",
+        "ref": "pptx image suites: pass (124 unit total)",
+        "date": "2026-11-22"
+      },
+      {
+        "kind": "report",
+        "ref": "python-pptx cross-validation: PICTURE shape, exact bytes",
+        "date": "2026-11-22"
+      }
+    ],
+    "knownLimitations": [
+      "No cropping, aspect lock, or SVG; data URLs grow deck JSON size"
+    ]
   }
 ]

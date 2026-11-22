@@ -33,6 +33,7 @@
   .el { position: absolute; }
   .el.text .t { width: 100%; height: 100%; overflow: hidden; line-height: 1.25; white-space: pre-wrap; }
   .el.rect { border-radius: 4px; }
+  .el.image img { width: 100%; height: 100%; object-fit: fill; display: block; pointer-events: none; }
   #canvas .el { cursor: move; }
   #canvas .el.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
   .handle { position: absolute; right: -7px; bottom: -7px; width: 12px; height: 12px;
@@ -60,6 +61,8 @@
     <button id="btn-del-slide" title="Delete slide">− Slide</button>
     <button id="btn-add-text" title="Add text box">+ Text</button>
     <button id="btn-add-rect" title="Add box">+ Box</button>
+    <button id="btn-add-image" title="Insert image from file">+ Image</button>
+    <input id="image-open" type="file" accept="image/png,image/jpeg,image/gif" style="display:none" />
     <button id="btn-del-el" title="Delete selected element (Del)">Delete el.</button>
     <button id="btn-undo" title="Undo (Ctrl/Cmd-Z)">↶</button>
     <button id="btn-redo" title="Redo (Ctrl/Cmd-Y)">↷</button>
@@ -124,6 +127,9 @@
   function rectElement(props) {
     return { id: newElemId(), kind: "rect", fill: "#dbe7f0", ...props };
   }
+  function imageElement(src, props) {
+    return { id: newElemId(), kind: "image", src, ...props };
+  }
   function addSlide(deck2, afterIndex) {
     const slide = newSlide([
       textElement({ x: 120, y: 80, w: 1360, h: 110, text: "Slide title", size: 60, bold: true }),
@@ -181,7 +187,9 @@
       s.elements.forEach((e) => {
         if (ids.has(e.id)) errors.push(`duplicate element id ${e.id}`);
         ids.add(e.id);
-        if (e.kind !== "text" && e.kind !== "rect") errors.push(`slide ${si}: unknown element kind`);
+        if (e.kind !== "text" && e.kind !== "rect" && e.kind !== "image") errors.push(`slide ${si}: unknown element kind`);
+        if (e.kind === "image" && (typeof e.src !== "string" || !e.src.startsWith("data:image/")))
+          errors.push(`slide ${si}: image element without a data:image src`);
         if (e.x < 0 || e.y < 0 || e.x + e.w > CANVAS_W || e.y + e.h > CANVAS_H) {
           errors.push(`slide ${si}: element ${e.id} outside canvas`);
         }
@@ -405,6 +413,22 @@
   var NS_A = `xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"`;
   var NS_R = `xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`;
   var REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+  function decodeBase64(b64) {
+    if (typeof atob === "function") {
+      const bin = atob(b64);
+      const out = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+      return out;
+    }
+    return new Uint8Array(Buffer.from(b64, "base64"));
+  }
+  function encodeBase64(data) {
+    if (typeof Buffer !== "undefined") return Buffer.from(data).toString("base64");
+    let bin = "";
+    for (const byte of data) bin += String.fromCharCode(byte);
+    return btoa(bin);
+  }
+  var DATA_URL_RE = /^data:image\/(png|jpeg|jpg|gif);base64,(.+)$/;
   function xmlEscape(text) {
     return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
   }
@@ -412,11 +436,23 @@
     const m = /^#?([0-9a-fA-F]{6})$/.exec(color ?? "");
     return (m ? m[1] : fallback).toUpperCase();
   }
-  function shapeXml(el, index) {
+  function shapeXml(el, index, media) {
     const off = `<a:off x="${Math.round(el.x * EMU_PER_UNIT)}" y="${Math.round(el.y * EMU_PER_UNIT)}"/>`;
     const ext = `<a:ext cx="${Math.round(el.w * EMU_PER_UNIT)}" cy="${Math.round(el.h * EMU_PER_UNIT)}"/>`;
     const xfrm = `<a:xfrm>${off}${ext}</a:xfrm>`;
     const geom = `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>`;
+    if (el.kind === "image") {
+      const m = DATA_URL_RE.exec(el.src ?? "");
+      if (!m || !media) {
+        return `<p:sp><p:nvSpPr><p:cNvPr id="${index + 2}" name="Image ${index + 1}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm}${geom}<a:solidFill><a:srgbClr val="EEEEEE"/></a:solidFill></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="en-US"/></a:p></p:txBody></p:sp>`;
+      }
+      const ext2 = m[1] === "jpg" ? "jpeg" : m[1];
+      const partName = `ppt/media/image${media.parts.length + 1}.${ext2}`;
+      media.parts.push({ name: partName, ext: ext2, data: decodeBase64(m[2]) });
+      const relId = `rIdImg${media.slideRels.length + 1}`;
+      media.slideRels.push({ id: relId, target: `../media/${partName.split("/").pop()}` });
+      return `<p:pic><p:nvPicPr><p:cNvPr id="${index + 2}" name="Picture ${index + 1}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="${relId}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>${xfrm}${geom}</p:spPr></p:pic>`;
+    }
     if (el.kind === "rect") {
       return `<p:sp><p:nvSpPr><p:cNvPr id="${index + 2}" name="Box ${index + 1}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm}${geom}<a:solidFill><a:srgbClr val="${hex6(el.fill, "DBE7F0")}"/></a:solidFill></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="en-US"/></a:p></p:txBody></p:sp>`;
     }
@@ -431,9 +467,9 @@
     }).join("");
     return `<p:sp><p:nvSpPr><p:cNvPr id="${index + 2}" name="TextBox ${index + 1}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm}${geom}<a:noFill/></p:spPr><p:txBody><a:bodyPr wrap="square" rtlCol="0"/><a:lstStyle/>${paragraphs}</p:txBody></p:sp>`;
   }
-  function slideXml(slide) {
+  function slideXml(slide, media) {
     return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<p:sld ${NS_P} ${NS_A} ${NS_R}><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>` + slide.elements.map(shapeXml).join("") + `</p:spTree></p:cSld><p:clrMapOvr><a:overrideClrMapping bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/></p:clrMapOvr></p:sld>`;
+<p:sld ${NS_P} ${NS_A} ${NS_R}><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>` + slide.elements.map((el, i) => shapeXml(el, i, media)).join("") + `</p:spTree></p:cSld><p:clrMapOvr><a:overrideClrMapping bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/></p:clrMapOvr></p:sld>`;
   }
   var CLR_MAP = `bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"`;
   var SLIDE_MASTER = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -454,7 +490,7 @@
   async function exportPptx(deck2) {
     const n = deck2.slides.length;
     const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/><Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>` + deck2.slides.map(
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="png" ContentType="image/png"/><Default Extension="jpeg" ContentType="image/jpeg"/><Default Extension="gif" ContentType="image/gif"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/><Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>` + deck2.slides.map(
       (_, i) => `<Override PartName="/ppt/slides/slide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`
     ).join("") + `</Types>`;
     const presentation = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -492,13 +528,24 @@
       },
       { name: "ppt/theme/theme1.xml", data: textEncoder2.encode(THEME) }
     ];
+    const allMedia = [];
     deck2.slides.forEach((slide, i) => {
-      entries.push({ name: `ppt/slides/slide${i + 1}.xml`, data: textEncoder2.encode(slideXml(slide)) });
+      const media = { parts: allMedia, slideRels: [] };
+      const xml = slideXml(slide, media);
+      entries.push({ name: `ppt/slides/slide${i + 1}.xml`, data: textEncoder2.encode(xml) });
       entries.push({
         name: `ppt/slides/_rels/slide${i + 1}.xml.rels`,
-        data: textEncoder2.encode(rels([{ id: "rId1", type: "slideLayout", target: "../slideLayouts/slideLayout1.xml" }]))
+        data: textEncoder2.encode(
+          rels([
+            { id: "rId1", type: "slideLayout", target: "../slideLayouts/slideLayout1.xml" },
+            ...media.slideRels.map((r) => ({ id: r.id, type: "image", target: r.target }))
+          ])
+        )
       });
     });
+    for (const part of allMedia) {
+      entries.push({ name: part.name, data: part.data });
+    }
     return {
       bytes: await zipWrite(entries),
       report: {
@@ -665,6 +712,20 @@
         return;
       }
       const dom = parseXml(textDecoder2.decode(entry.data));
+      const slideRelTargets = /* @__PURE__ */ new Map();
+      {
+        const dir = part.slice(0, part.lastIndexOf("/"));
+        const relsName = `${dir}/_rels/${part.split("/").pop()}.rels`;
+        const relsPart = byName.get(relsName);
+        if (relsPart) {
+          const relsDom = parseXml(textDecoder2.decode(relsPart.data));
+          for (const rel of deep(relsDom, "Relationship")) {
+            const target = rel.getAttribute("Target") ?? "";
+            const resolved = target.startsWith("../") ? "ppt/" + target.slice(3) : `${dir}/${target}`;
+            slideRelTargets.set(rel.getAttribute("Id") ?? "", resolved);
+          }
+        }
+      }
       const spTree = deep(dom, "spTree")[0];
       if (!spTree) {
         deck2.slides.push(slide);
@@ -677,11 +738,8 @@
           const el = importShape(child, scale, warnings, si, fallbackSlot);
           if (el) slide.elements.push(el);
         } else if (child.localName === "pic") {
-          warnings.push({
-            code: "PPTX-IMPORT-PICTURE",
-            message: `Slide ${si + 1}: a picture was skipped (images not yet in the model).`,
-            blockIndex: si
-          });
+          const el = importPicture(child, scale, si, warnings, slideRelTargets, byName);
+          if (el) slide.elements.push(el);
         } else if (child.localName === "graphicFrame") {
           warnings.push({
             code: "PPTX-IMPORT-GRAPHIC",
@@ -701,6 +759,40 @@
     const errors = validateDeck(deck2);
     if (errors.length > 0) throw new Error(`PPTX import produced invalid deck: ${errors.join("; ")}`);
     return { deck: deck2, report: { format: "pptx", lossless: warnings.length === 0, warnings } };
+  }
+  var MIME_BY_EXT = {
+    png: "image/png",
+    jpeg: "image/jpeg",
+    jpg: "image/jpeg",
+    gif: "image/gif"
+  };
+  function importPicture(pic, scale, slideIndex, warnings, relTargets, byName) {
+    const xfrm = deep(pic, "xfrm")[0];
+    const off = xfrm ? kid(xfrm, "off") : null;
+    const ext = xfrm ? kid(xfrm, "ext") : null;
+    const x = Number(off?.getAttribute("x") ?? 0) * scale.x;
+    const y = Number(off?.getAttribute("y") ?? 0) * scale.y;
+    const w = Number(ext?.getAttribute("cx") ?? 0) * scale.x || 400;
+    const h = Number(ext?.getAttribute("cy") ?? 0) * scale.y || 300;
+    const blip = deep(pic, "blip")[0];
+    const embed = blip?.getAttributeNS?.("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "embed") ?? blip?.getAttribute("r:embed") ?? "";
+    const target = relTargets.get(embed);
+    const part = target ? byName.get(target) : void 0;
+    const fileExt = target?.split(".").pop()?.toLowerCase() ?? "";
+    const mime = MIME_BY_EXT[fileExt];
+    if (!part || !mime) {
+      warnings.push({
+        code: "PPTX-IMPORT-PICTURE-MISSING",
+        message: `Slide ${slideIndex + 1}: a picture's media part was missing or unsupported (${fileExt || "unknown"}); placeholder kept.`,
+        blockIndex: slideIndex
+      });
+      const el2 = { id: newElemId(), kind: "rect", x, y, w, h, fill: "#eeeeee" };
+      clampElement(el2);
+      return el2;
+    }
+    const el = imageElement(`data:${mime};base64,${encodeBase64(part.data)}`, { x, y, w, h });
+    clampElement(el);
+    return el;
   }
 
   // apps/slides/src/main.ts
@@ -747,6 +839,9 @@
   }
   function elementHtml(el, scale, selected) {
     const style = `left:${el.x * scale}px;top:${el.y * scale}px;width:${el.w * scale}px;height:${el.h * scale}px;`;
+    if (el.kind === "image") {
+      return `<div class="el image${selected ? " sel" : ""}" data-id="${el.id}" style="${style}"><img src="${el.src ?? ""}" alt="" draggable="false"/>` + (selected ? `<div class="handle" data-handle="${el.id}"></div>` : "") + `</div>`;
+    }
     if (el.kind === "rect") {
       return `<div class="el rect${selected ? " sel" : ""}" data-id="${el.id}" style="${style}background:${el.fill ?? "#dbe7f0"}"></div>`;
     }
@@ -963,6 +1058,36 @@
       selectedId = el.id;
     })
   );
+  document.getElementById("btn-add-image")?.addEventListener("click", () => {
+    document.getElementById("image-open")?.click();
+  });
+  document.getElementById("image-open")?.addEventListener("change", (e) => {
+    const input = e.target;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const src = String(reader.result ?? "");
+      const probe = new Image();
+      probe.onload = () => {
+        const maxW = 700;
+        const ratio = probe.naturalHeight / Math.max(1, probe.naturalWidth);
+        const w = Math.min(maxW, probe.naturalWidth || maxW);
+        const h = Math.max(60, Math.round(w * ratio) || 400);
+        cmd(() => {
+          const el = imageElement(src, { x: (1600 - w) / 2, y: Math.max(40, (900 - h) / 2), w, h });
+          addElement(deck, current, el);
+          selectedId = el.id;
+        });
+      };
+      probe.onerror = () => {
+        statusEl.textContent = "\u26A0 Could not read that image";
+      };
+      probe.src = src;
+    };
+    reader.readAsDataURL(file);
+  });
   document.getElementById("btn-add-rect")?.addEventListener(
     "click",
     () => cmd(() => {

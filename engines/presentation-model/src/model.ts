@@ -9,7 +9,7 @@ export const DECK_SCHEMA_VERSION = "1.0";
 export const CANVAS_W = 1600;
 export const CANVAS_H = 900;
 
-export type ElementKind = "text" | "rect";
+export type ElementKind = "text" | "rect" | "image";
 export type TextAlign = "left" | "center" | "right";
 
 export interface SlideElement {
@@ -27,6 +27,8 @@ export interface SlideElement {
   color?: string;
   /** rect elements */
   fill?: string;
+  /** image elements: a data: URL (kept self-contained in the deck) */
+  src?: string;
 }
 
 export interface Slide {
@@ -76,6 +78,13 @@ export function textElement(props: Partial<SlideElement> & Pick<SlideElement, "x
 
 export function rectElement(props: Partial<SlideElement> & Pick<SlideElement, "x" | "y" | "w" | "h">): SlideElement {
   return { id: newElemId(), kind: "rect", fill: "#dbe7f0", ...props };
+}
+
+export function imageElement(
+  src: string,
+  props: Pick<SlideElement, "x" | "y" | "w" | "h">
+): SlideElement {
+  return { id: newElemId(), kind: "image", src, ...props };
 }
 
 // ---------- operations (mutate in place, like the document engine) ----------
@@ -156,7 +165,9 @@ export function validateDeck(deck: DeckModel): string[] {
     s.elements.forEach((e) => {
       if (ids.has(e.id)) errors.push(`duplicate element id ${e.id}`);
       ids.add(e.id);
-      if (e.kind !== "text" && e.kind !== "rect") errors.push(`slide ${si}: unknown element kind`);
+      if (e.kind !== "text" && e.kind !== "rect" && e.kind !== "image") errors.push(`slide ${si}: unknown element kind`);
+      if (e.kind === "image" && (typeof e.src !== "string" || !e.src.startsWith("data:image/")))
+        errors.push(`slide ${si}: image element without a data:image src`);
       if (e.x < 0 || e.y < 0 || e.x + e.w > CANVAS_W || e.y + e.h > CANVAS_H) {
         errors.push(`slide ${si}: element ${e.id} outside canvas`);
       }

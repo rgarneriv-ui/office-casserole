@@ -695,7 +695,7 @@
     "application": "casserole-write",
     "name": "Tables (atomic blocks)",
     "priority": "P0",
-    "description": "Insert/edit/delete tables as atomic blocks: click-to-edit cells with Tab navigation, row/col controls, invertible journaled set-table operations with OT conflict semantics; HTML/MD/DOCX w:tbl round-trip, simplified PDF rendering with loss note.",
+    "description": "Insert/edit/delete tables as atomic blocks: click-to-edit cells with Tab navigation, row/col controls, invertible journaled set-table operations with OT conflict semantics; HTML/MD/DOCX w:tbl round-trip, ruled PDF grid rendering with per-cell wrap and row pagination.",
     "baseline": {
       "product": "Microsoft Word",
       "capability": "Basic tables",
@@ -745,11 +745,16 @@
         "kind": "test-run",
         "ref": "smoke-write.mjs scenario 6: pass",
         "date": "2026-11-22"
+      },
+      {
+        "kind": "test-run",
+        "ref": "pdf table grid suites + pypdf validation",
+        "date": "2026-11-22"
       }
     ],
     "knownLimitations": [
       "Plain-text cells (no per-cell formatting or nested blocks — ADR-0011 migration recorded)",
-      "No spans, column widths, or PDF grid drawing yet"
+      "No spans or column widths yet (PDF grid drawing landed in WO-23)"
     ]
   }
 ]

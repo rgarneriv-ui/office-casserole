@@ -16,6 +16,7 @@ import {
   deckFromJSON,
   deckToJSON,
   duplicateSlide,
+  imageElement,
   newDeck,
   rectElement,
   removeElement,
@@ -78,6 +79,14 @@ function restore(): void {
 function elementHtml(el: SlideElement, scale: number, selected: boolean): string {
   const style =
     `left:${el.x * scale}px;top:${el.y * scale}px;width:${el.w * scale}px;height:${el.h * scale}px;`;
+  if (el.kind === "image") {
+    return (
+      `<div class="el image${selected ? " sel" : ""}" data-id="${el.id}" style="${style}">` +
+      `<img src="${el.src ?? ""}" alt="" draggable="false"/>` +
+      (selected ? `<div class="handle" data-handle="${el.id}"></div>` : "") +
+      `</div>`
+    );
+  }
   if (el.kind === "rect") {
     return `<div class="el rect${selected ? " sel" : ""}" data-id="${el.id}" style="${style}background:${el.fill ?? "#dbe7f0"}"></div>`;
   }
@@ -336,6 +345,36 @@ document.getElementById("btn-add-text")?.addEventListener("click", () =>
     selectedId = el.id;
   })
 );
+document.getElementById("btn-add-image")?.addEventListener("click", () => {
+  (document.getElementById("image-open") as HTMLInputElement | null)?.click();
+});
+document.getElementById("image-open")?.addEventListener("change", (e) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const src = String(reader.result ?? "");
+    const probe = new Image();
+    probe.onload = () => {
+      const maxW = 700;
+      const ratio = probe.naturalHeight / Math.max(1, probe.naturalWidth);
+      const w = Math.min(maxW, probe.naturalWidth || maxW);
+      const h = Math.max(60, Math.round(w * ratio) || 400);
+      cmd(() => {
+        const el = imageElement(src, { x: (1600 - w) / 2, y: Math.max(40, (900 - h) / 2), w, h });
+        addElement(deck, current, el);
+        selectedId = el.id;
+      });
+    };
+    probe.onerror = () => {
+      statusEl.textContent = "⚠ Could not read that image";
+    };
+    probe.src = src;
+  };
+  reader.readAsDataURL(file);
+});
 document.getElementById("btn-add-rect")?.addEventListener("click", () =>
   cmd(() => {
     const el = rectElement({ x: 500, y: 300, w: 600, h: 300 });

@@ -115,10 +115,11 @@ test("pptx: import reports pictures, frames, groups, and missing geometry", asyn
   ]);
   const { deck, report } = await importPptx(bytes, parseXml);
   assert.equal(deck.slides.length, 1);
-  assert.equal(deck.slides[0]!.elements.length, 1);
+  // text shape + the broken picture's placeholder rect
+  assert.equal(deck.slides[0]!.elements.length, 2);
   assert.equal(deck.slides[0]!.elements[0]!.text, "Placeholder title");
   const codes = report.warnings.map((w) => w.code);
-  for (const expected of ["PPTX-IMPORT-NO-GEOMETRY", "PPTX-IMPORT-PICTURE", "PPTX-IMPORT-GRAPHIC", "PPTX-IMPORT-GROUP"]) {
+  for (const expected of ["PPTX-IMPORT-NO-GEOMETRY", "PPTX-IMPORT-PICTURE-MISSING", "PPTX-IMPORT-GRAPHIC", "PPTX-IMPORT-GROUP"]) {
     assert.ok(codes.includes(expected), `missing ${expected} in ${codes}`);
   }
 });
@@ -149,3 +150,47 @@ async function zipWriteHelper(parts: [string, string][]) {
   const { zipWrite } = await import("../src/zip.js");
   return zipWrite(parts.map(([name, xml]) => ({ name, data: new TextEncoder().encode(xml) })));
 }
+
+// 1x1 red PNG
+const RED_PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+test("pptx: images embed as media parts and round-trip to data URLs", async () => {
+  const { imageElement, newDeck: nd, addElement: ae } = await import("../../presentation-model/src/model.js");
+  const deck = nd();
+  ae(deck, 0, imageElement(`data:image/png;base64,${RED_PNG}`, { x: 200, y: 150, w: 400, h: 300 }));
+  const { bytes, report } = await exportPptx(deck);
+  assert.equal(report.lossless, true);
+  const entries = await zipRead(bytes);
+  const names = entries.map((e) => e.name);
+  assert.ok(names.includes("ppt/media/image1.png"), names.join(","));
+  const slide1 = new TextDecoder().decode(entries.find((e) => e.name === "ppt/slides/slide1.xml")!.data);
+  assert.ok(slide1.includes("<p:pic>"), "picture shape emitted");
+  assert.ok(slide1.includes('r:embed="rIdImg1"'));
+  const rels = new TextDecoder().decode(entries.find((e) => e.name === "ppt/slides/_rels/slide1.xml.rels")!.data);
+  assert.ok(rels.includes("../media/image1.png"));
+  const ct = new TextDecoder().decode(entries.find((e) => e.name === "[Content_Types].xml")!.data);
+  assert.ok(ct.includes('Extension="png"'));
+
+  const { deck: back, report: imp } = await importPptx(bytes, parseXml);
+  assert.equal(imp.lossless, true, JSON.stringify(imp.warnings));
+  const img = back.slides[0]!.elements.find((e) => e.kind === "image")!;
+  assert.ok(img, "image element imported");
+  assert.equal(img.src, `data:image/png;base64,${RED_PNG}`, "media bytes round-trip exactly");
+  assert.ok(Math.abs(img.x - 200) < 1 && Math.abs(img.w - 400) < 1, "geometry preserved");
+});
+
+test("pptx: a picture with missing media imports as a placeholder with a warning", async () => {
+  const slide =
+    `<p:sld xmlns:p="x" xmlns:a="y" xmlns:r="z"><p:cSld><p:spTree>` +
+    `<p:pic><p:blipFill><a:blip r:embed="rId9"/></p:blipFill>` +
+    `<p:spPr><a:xfrm><a:off x="762000" y="762000"/><a:ext cx="1524000" cy="1524000"/></a:xfrm></p:spPr></p:pic>` +
+    `</p:spTree></p:cSld></p:sld>`;
+  const bytes = await zipWriteHelper([
+    ["ppt/presentation.xml", `<p:presentation xmlns:p="x"><p:sldSz cx="12192000" cy="6858000"/></p:presentation>`],
+    ["ppt/slides/slide1.xml", slide],
+  ]);
+  const { deck, report } = await importPptx(bytes, parseXml);
+  assert.ok(report.warnings.some((w) => w.code === "PPTX-IMPORT-PICTURE-MISSING"));
+  assert.equal(deck.slides[0]!.elements[0]!.kind, "rect", "footprint kept as placeholder");
+});
