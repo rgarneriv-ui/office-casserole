@@ -575,5 +575,58 @@
     "knownLimitations": [
       "No op serialization/authorship yet (next step toward §14.1 collaboration); Slides deck undo still snapshot-based"
     ]
+  },
+  {
+    "id": "WRITE-SYNC-001",
+    "application": "casserole-write",
+    "name": "Operation journal + transform/rebase substrate",
+    "priority": "P0",
+    "description": "Serializable attributed op journal (append/replay/compact, schema-validated) and OT over the primitive set with explicit tie-breaks and transaction-granular conflict surfacing; two concurrent replicas converge by rebase.",
+    "baseline": {
+      "product": "Google Docs",
+      "capability": "Collaborative editing substrate (reference behavior)",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
+    "owner": "engines/document-model (journal, transform)",
+    "dependencies": [
+      "WRITE-EDIT-002"
+    ],
+    "commands": [
+      "journal.append",
+      "journal.replay",
+      "journal.compact",
+      "rebase.sequence"
+    ],
+    "offlineSupport": "fully offline (substrate; no network layer yet)",
+    "edgeCases": [
+      "straddling-split partition",
+      "split-inside-deletion collapse",
+      "merge of split block",
+      "same-point insert bias",
+      "transaction-whole rejection"
+    ],
+    "acceptance": [
+      "TP1 convergence (byte-equal, ids included) for every supported primitive pair",
+      "Conflicts carry reasons and reject transactions whole",
+      "Journal replay deterministic; serialization round-trips; compaction preserves replay",
+      "Two replicas recording real operations converge through rebase"
+    ],
+    "verification": {
+      "required": [
+        "unit"
+      ]
+    },
+    "status": "tested",
+    "evidence": [
+      {
+        "kind": "test-run",
+        "ref": "transform.test.ts: 9 suites incl. TP1 matrix + two-replica simulation (100 unit total)",
+        "date": "2026-11-22"
+      }
+    ],
+    "knownLimitations": [
+      "TP2 not claimed (client/relay topology assumed); no network relay, presence, or conflict UX yet; Write does not yet record into a journal at runtime"
+    ]
   }
 ]

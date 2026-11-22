@@ -6,3 +6,5 @@ export * from "./inspector";
 export * from "./serialize";
 export * from "./diff";
 export * from "./oplog";
+export * from "./journal";
+export * from "./transform";
