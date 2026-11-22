@@ -100,19 +100,28 @@ corpus yet (§22.2).
 
 ## Phase position (spec §25)
 
-All four Phase-3 core editors now exist as working, tested vertical slices
-(Write, Sheets, Slides, PDF generation). The Phase-3 exit gate — "all four
-editors complete **validated representative workflows**" — additionally
-requires differential fixture corpora against real Office files, which do not
-exist yet; the gate is therefore **not** claimed as passed.
+All four Phase-3 core editors exist as working, tested vertical slices (Write,
+Sheets, Slides, PDF generation), each with Office-format conversion (DOCX,
+XLSX, PPTX) through the loss-report pipeline and independent-parser
+cross-validation (pypdf, openpyxl, python-pptx). The Phase-3 exit gate —
+"validated representative workflows" — still requires a corpus of files
+produced by real Word/Excel/PowerPoint, so the gate is **not** claimed as
+passed.
+
+## Compatibility fixtures (§22.2)
+
+Drop real Office files into `tests/fixtures/docx/` and `tests/fixtures/xlsx/`
+and run `node scripts/compat-fixtures.mjs`. The harness fails on crashes and
+invalid models, records loss reports to `tests/fixtures/reports/` (diffable in
+git), and for XLSX compares our recomputed formula values against the
+producer's cached values. Seeded with python-docx and openpyxl fixtures;
+files saved by actual Office applications are the ones that matter most.
 
 ## Next engineering tasks (dependency order)
 
-1. Real-Word/Excel fixture corpus + differential testing (§22.2); Original
-   Format Preservation store (§5.1) for round-tripping unknown parts.
-2. XLSX import/export for Sheets and PPTX for Slides through the
-   format-conversion pipeline (same loss-report contract).
-3. Reveal Codes in-panel code editing (§6.2.3); inline rich text editing in
+1. Grow the fixture corpus with real Word/Excel/PowerPoint files; add PPTX
+   import; Original Format Preservation store (§5.1).
+2. Reveal Codes in-panel code editing (§6.2.3); inline rich text editing in
    Slides; proportional-font PDF output (ADR-0006 path).
-4. Lift command sets into the `CommandDefinition` registry + command palette.
-5. Collaboration/versioning layer (Phase 4) once the engines above stabilize.
+3. Lift command sets into the `CommandDefinition` registry + command palette.
+4. Collaboration/versioning layer (Phase 4) once the engines above stabilize.

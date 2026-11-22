@@ -1,0 +1,15 @@
+{
+  "fixture": "python-docx-sample.docx",
+  "format": "docx",
+  "ok": true,
+  "blocks": 8,
+  "chars": 123,
+  "lossless": false,
+  "warnings": [
+    {
+      "code": "DOCX-IMPORT-TABLE",
+      "message": "Tables are not yet supported; table content imported as plain paragraphs.",
+      "blockIndex": 3
+    }
+  ]
+}

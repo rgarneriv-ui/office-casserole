@@ -1,0 +1,85 @@
+// Compatibility fixture harness (spec §22.2–22.3).
+//
+// Drop real Office files into:
+//   tests/fixtures/docx/*.docx
+//   tests/fixtures/xlsx/*.xlsx
+// and run:  node scripts/compat-fixtures.mjs
+//
+// Every fixture is imported through the conversion pipeline. The harness
+// FAILS on crashes and invalid models (a fixture we cannot read safely is a
+// defect), and RECORDS losses without failing (losses are honest, crashes are
+// not). Each run writes a per-fixture report to tests/fixtures/reports/ so
+// regressions in loss behavior are diffable in git.
+import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { JSDOM } from "jsdom";
+
+const parseXml = (xml) => new (new JSDOM("").window.DOMParser)().parseFromString(xml, "application/xml");
+
+const { importDocx } = await import("../build/engines/format-conversion/src/docx.js");
+const { importXlsx } = await import("../build/engines/format-conversion/src/xlsx.js");
+const { validateModel, docText } = await import("../build/engines/document-model/src/model.js");
+
+async function listFixtures(dir) {
+  try {
+    return (await readdir(dir)).filter((f) => !f.startsWith("."));
+  } catch {
+    return [];
+  }
+}
+
+await mkdir("tests/fixtures/reports", { recursive: true });
+let failures = 0;
+let total = 0;
+const summary = [];
+
+for (const name of await listFixtures("tests/fixtures/docx")) {
+  total++;
+  const path = `tests/fixtures/docx/${name}`;
+  try {
+    const bytes = new Uint8Array(await readFile(path));
+    const { model, report } = await importDocx(bytes, parseXml);
+    const errors = validateModel(model);
+    if (errors.length > 0) throw new Error(`invalid model: ${errors.join("; ")}`);
+    const out = {
+      fixture: name,
+      format: "docx",
+      ok: true,
+      blocks: model.blocks.length,
+      chars: docText(model).length,
+      lossless: report.lossless,
+      warnings: report.warnings,
+    };
+    await writeFile(`tests/fixtures/reports/${name}.report.json`, JSON.stringify(out, null, 2) + "\n");
+    summary.push(`OK   docx ${name} — ${out.blocks} blocks, ${report.warnings.length} warning(s)`);
+  } catch (err) {
+    failures++;
+    summary.push(`FAIL docx ${name} — ${err.message}`);
+  }
+}
+
+for (const name of await listFixtures("tests/fixtures/xlsx")) {
+  total++;
+  const path = `tests/fixtures/xlsx/${name}`;
+  try {
+    const bytes = new Uint8Array(await readFile(path));
+    const { sheet, report } = await importXlsx(bytes, parseXml);
+    const out = {
+      fixture: name,
+      format: "xlsx",
+      ok: true,
+      cells: sheet.entries().length,
+      lossless: report.lossless,
+      mismatches: report.warnings.filter((w) => w.code === "XLSX-IMPORT-VALUE-MISMATCH").length,
+      warnings: report.warnings,
+    };
+    await writeFile(`tests/fixtures/reports/${name}.report.json`, JSON.stringify(out, null, 2) + "\n");
+    summary.push(`OK   xlsx ${name} — ${out.cells} cells, ${out.mismatches} value mismatch(es), ${report.warnings.length} warning(s)`);
+  } catch (err) {
+    failures++;
+    summary.push(`FAIL xlsx ${name} — ${err.message}`);
+  }
+}
+
+console.log(summary.join("\n") || "No fixtures found — add real Office files under tests/fixtures/{docx,xlsx}/");
+console.log(`\n${total - failures}/${total} fixtures imported cleanly`);
+if (failures > 0) process.exit(1);

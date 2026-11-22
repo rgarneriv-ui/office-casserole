@@ -244,7 +244,9 @@ export async function importXlsx(
 
   // differential-lite: compare our recomputed values with the producer's
   for (const { addr, storedValue, type } of formulas) {
-    if (storedValue === null) continue;
+    // null or empty <v>: the producer cached no value (openpyxl does this),
+    // so there is nothing to compare against.
+    if (storedValue === null || storedValue === "") continue;
     const ours = sheet.getCell(addr);
     let match: boolean;
     if (isError(ours)) {

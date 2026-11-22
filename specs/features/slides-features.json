@@ -100,5 +100,58 @@
     "knownLimitations": [
       "Text editing via prompt dialog in v0 (inline rich editing is a later work order)"
     ]
+  },
+  {
+    "id": "SLIDES-CONV-001",
+    "application": "casserole-slides",
+    "name": "PPTX export",
+    "priority": "P1",
+    "description": "Export decks as complete PresentationML packages (slides, blank master/layout, theme) with shapes as real geometry and text runs in EMU coordinates.",
+    "baseline": {
+      "product": "Microsoft PowerPoint",
+      "capability": "PPTX (ECMA-376 subset)",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
+    "owner": "engines/format-conversion",
+    "dependencies": [
+      "SLIDES-MODEL-001"
+    ],
+    "commands": [
+      "export.pptx"
+    ],
+    "offlineSupport": "fully offline",
+    "edgeCases": [
+      "multi-paragraph text",
+      "XML escaping",
+      "EMU geometry conversion",
+      "deterministic bytes"
+    ],
+    "acceptance": [
+      "Package carries every required part and relationship",
+      "python-pptx reads slides, shapes, text, dimensions"
+    ],
+    "verification": {
+      "required": [
+        "unit",
+        "compatibility"
+      ]
+    },
+    "status": "tested",
+    "evidence": [
+      {
+        "kind": "test-run",
+        "ref": "engines/format-conversion/test/pptx.test.ts: 3 tests pass",
+        "date": "2026-11-22"
+      },
+      {
+        "kind": "report",
+        "ref": "python-pptx cross-validation: 2-slide sample parsed",
+        "date": "2026-11-22"
+      }
+    ],
+    "knownLimitations": [
+      "Export only (no PPTX import); no animations/media; opening in real PowerPoint not yet verified"
+    ]
   }
 ]
