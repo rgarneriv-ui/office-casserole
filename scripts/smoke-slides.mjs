@@ -30,3 +30,17 @@ assert(!doc.getElementById("present").hidden, "present mode shown");
 assert(doc.querySelector("#present .stage .el"), "present stage renders elements");
 
 console.log("SMOKE OK — slides boot, add/undo, autosave, present");
+
+// inline editing: double-click opens overlay; typing + blur commits
+{
+  const el = doc.querySelector("#canvas .el.text");
+  el.dispatchEvent(new dom.window.MouseEvent("dblclick", { bubbles: true }));
+  const overlay = doc.querySelector("#canvas .edit-overlay");
+  assert(overlay, "edit overlay opens on double-click");
+  overlay.value = "Edited inline!";
+  overlay.dispatchEvent(new dom.window.FocusEvent("blur"));
+  await new Promise(r => setTimeout(r, 50));
+  assert(!doc.querySelector("#canvas .edit-overlay"), "overlay closed on blur");
+  assert(doc.getElementById("canvas").textContent.includes("Edited inline!"), "committed text rendered");
+  console.log("SMOKE OK — inline editing commit");
+}

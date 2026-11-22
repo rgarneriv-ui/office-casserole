@@ -234,17 +234,64 @@ canvasEl.addEventListener("pointerup", () => {
   drag = null;
 });
 
+// Inline text editing: double-click opens a textarea positioned over the
+// element, styled to match; commit on blur or Ctrl/Cmd-Enter, Esc cancels.
+let editingOverlay: HTMLTextAreaElement | null = null;
+
+function closeOverlay(commit: boolean): void {
+  if (!editingOverlay) return;
+  const overlay = editingOverlay;
+  editingOverlay = null; // guard against blur re-entry
+  const id = overlay.dataset.elId!;
+  const value = overlay.value;
+  overlay.remove();
+  if (commit) {
+    const el = deck.slides[current]?.elements.find((x) => x.id === id);
+    if (el && value !== (el.text ?? "")) {
+      history.checkpoint(deck);
+      updateElement(deck, current, id, { text: value });
+      scheduleSave();
+    }
+  }
+  render();
+}
+
+function openOverlay(el: SlideElement): void {
+  closeOverlay(true);
+  const scale = canvasEl.clientWidth / CANVAS_W;
+  const overlay = document.createElement("textarea");
+  overlay.className = "edit-overlay";
+  overlay.dataset.elId = el.id;
+  overlay.value = el.text ?? "";
+  overlay.style.left = `${el.x * scale}px`;
+  overlay.style.top = `${el.y * scale}px`;
+  overlay.style.width = `${el.w * scale}px`;
+  overlay.style.height = `${el.h * scale}px`;
+  overlay.style.fontSize = `${(el.size ?? 36) * scale}px`;
+  overlay.style.fontWeight = el.bold ? "700" : "400";
+  overlay.style.textAlign = el.align ?? "left";
+  overlay.style.color = el.color ?? "#222";
+  overlay.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Escape") closeOverlay(false);
+    else if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) closeOverlay(true);
+  });
+  overlay.addEventListener("blur", () => closeOverlay(true));
+  overlay.addEventListener("pointerdown", (e) => e.stopPropagation());
+  canvasEl.appendChild(overlay);
+  editingOverlay = overlay;
+  overlay.focus();
+  overlay.select();
+}
+
 canvasEl.addEventListener("dblclick", (e) => {
   const elDiv = (e.target as HTMLElement).closest(".el.text") as HTMLElement | null;
   if (!elDiv) return;
   const el = deck.slides[current]?.elements.find((x) => x.id === elDiv.dataset.id);
   if (!el) return;
-  const value = window.prompt("Edit text (\\n for line breaks preserved):", el.text ?? "");
-  if (value === null) return;
-  history.checkpoint(deck);
-  updateElement(deck, current, el.id, { text: value });
+  selectedId = el.id;
   render();
-  scheduleSave();
+  openOverlay(el);
 });
 
 thumbsEl.addEventListener("click", (e) => {
@@ -339,7 +386,11 @@ document.addEventListener("keydown", (e) => {
   } else if (mod && (e.key.toLowerCase() === "y" || (e.key.toLowerCase() === "z" && e.shiftKey))) {
     e.preventDefault();
     (document.getElementById("btn-redo") as HTMLButtonElement).click();
-  } else if ((e.key === "Delete" || e.key === "Backspace") && selectedId && (e.target as HTMLElement).tagName !== "INPUT") {
+  } else if (
+    (e.key === "Delete" || e.key === "Backspace") &&
+    selectedId &&
+    !["INPUT", "TEXTAREA"].includes((e.target as HTMLElement).tagName)
+  ) {
     e.preventDefault();
     (document.getElementById("btn-del-el") as HTMLButtonElement).click();
   }
