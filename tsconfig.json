@@ -17,6 +17,8 @@
     "engines/format-conversion/test/**/*.ts",
     "engines/spreadsheet-calc/src/**/*.ts",
     "engines/spreadsheet-calc/test/**/*.ts",
+    "engines/pdf-engine/src/**/*.ts",
+    "engines/pdf-engine/test/**/*.ts",
     "packages/shared-types/src/**/*.ts"
   ]
 }

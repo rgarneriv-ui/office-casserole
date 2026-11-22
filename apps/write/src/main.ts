@@ -37,6 +37,7 @@ import {
 
 import { DocumentStore, newDocId, openBestStore } from "./store";
 import { exportDocx, importDocx } from "../../../engines/format-conversion/src/docx";
+import { exportPdf } from "../../../engines/pdf-engine/src/pdf";
 
 const BLOCK_TAG: Record<string, string> = { paragraph: "p", heading1: "h1", heading2: "h2" };
 
@@ -518,6 +519,19 @@ document.getElementById("btn-export-docx")?.addEventListener("click", async () =
       "application/vnd.openxmlformats-officedocument.wordprocessingml.document", bytes);
   } catch (err) {
     statusEl.textContent = `⚠ DOCX export failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+});
+document.getElementById("btn-export-pdf")?.addEventListener("click", async () => {
+  try {
+    const { bytes, report } = exportPdf(model);
+    const real = report.warnings.filter((w) => w.code !== "PDF-FONT-FAMILY");
+    if (real.length > 0) {
+      const msgs = [...new Set(real.map((w) => w.message))].join("\n• ");
+      if (!window.confirm(`PDF export notes:\n\n• ${msgs}\n\nExport anyway?`)) return;
+    }
+    await downloadBytes(`${currentTitle || "document"}.pdf`, "application/pdf", bytes);
+  } catch (err) {
+    statusEl.textContent = `⚠ PDF export failed: ${err instanceof Error ? err.message : String(err)}`;
   }
 });
 document.getElementById("btn-open")?.addEventListener("click", () => {
