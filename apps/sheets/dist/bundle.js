@@ -1,0 +1,868 @@
+"use strict";
+(() => {
+  var __defProp = Object.defineProperty;
+  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+  var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+
+  // engines/spreadsheet-calc/src/addr.ts
+  function colToName(col) {
+    let name = "";
+    let c = col;
+    for (; ; ) {
+      name = String.fromCharCode(65 + c % 26) + name;
+      c = Math.floor(c / 26) - 1;
+      if (c < 0) break;
+    }
+    return name;
+  }
+  function nameToCol(name) {
+    let col = 0;
+    for (const ch of name.toUpperCase()) {
+      col = col * 26 + (ch.charCodeAt(0) - 64);
+    }
+    return col - 1;
+  }
+  var ADDR_RE = /^\$?([A-Za-z]{1,3})\$?([0-9]+)$/;
+  function parseAddr(text) {
+    const m = ADDR_RE.exec(text);
+    if (!m) return null;
+    const row = parseInt(m[2], 10) - 1;
+    if (row < 0) return null;
+    return { col: nameToCol(m[1]), row };
+  }
+  function formatAddr(addr) {
+    return `${colToName(addr.col)}${addr.row + 1}`;
+  }
+  function addrKey(addr) {
+    return `${addr.col}:${addr.row}`;
+  }
+  function* rangeAddrs(from, to) {
+    const c0 = Math.min(from.col, to.col);
+    const c1 = Math.max(from.col, to.col);
+    const r0 = Math.min(from.row, to.row);
+    const r1 = Math.max(from.row, to.row);
+    for (let r = r0; r <= r1; r++) {
+      for (let c = c0; c <= c1; c++) {
+        yield { col: c, row: r };
+      }
+    }
+  }
+
+  // engines/spreadsheet-calc/src/types.ts
+  function isError(v) {
+    return typeof v === "object" && v !== null && v.kind === "error";
+  }
+  function err(code, detail) {
+    return { kind: "error", code, detail };
+  }
+
+  // engines/spreadsheet-calc/src/functions.ts
+  function flatten(args) {
+    const out = [];
+    for (const a of args) {
+      if (Array.isArray(a)) out.push(...a);
+      else out.push(a);
+    }
+    return out;
+  }
+  function firstError(values) {
+    for (const v of values) if (isError(v)) return v;
+    return null;
+  }
+  function numbersIn(values) {
+    return values.filter((v) => typeof v === "number");
+  }
+  function toNumber(v) {
+    if (v === null) return 0;
+    if (typeof v === "number") return v;
+    if (typeof v === "boolean") return v ? 1 : 0;
+    if (typeof v === "string") {
+      if (v.trim() === "") return 0;
+      const n = Number(v);
+      if (!Number.isNaN(n)) return n;
+      return err("#VALUE!", `'${v}' is not a number`);
+    }
+    return v;
+  }
+  function toText(v) {
+    if (v === null) return "";
+    if (typeof v === "string") return v;
+    if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
+    if (typeof v === "number") return String(v);
+    return v.code;
+  }
+  function toBool(v) {
+    if (isError(v)) return v;
+    if (v === null) return false;
+    if (typeof v === "boolean") return v;
+    if (typeof v === "number") return v !== 0;
+    const upper = v.toUpperCase();
+    if (upper === "TRUE") return true;
+    if (upper === "FALSE") return false;
+    return err("#VALUE!", `'${v}' is not a logical value`);
+  }
+  function aggregate(fn) {
+    return (args) => {
+      const values = flatten(args);
+      const e = firstError(values);
+      if (e) return e;
+      return fn(numbersIn(values));
+    };
+  }
+  function numeric1(fn) {
+    return (args) => {
+      const v = args[0];
+      if (Array.isArray(v)) return err("#VALUE!", "expected a single value, got a range");
+      const n = toNumber(v ?? null);
+      if (typeof n !== "number") return n;
+      return fn(n);
+    };
+  }
+  var FUNCTIONS = {
+    SUM: { minArgs: 1, maxArgs: Infinity, apply: aggregate((nums) => nums.reduce((a, b) => a + b, 0)) },
+    AVERAGE: {
+      minArgs: 1,
+      maxArgs: Infinity,
+      apply: aggregate((nums) => nums.length === 0 ? err("#DIV/0!", "AVERAGE of no numbers") : nums.reduce((a, b) => a + b, 0) / nums.length)
+    },
+    MIN: { minArgs: 1, maxArgs: Infinity, apply: aggregate((nums) => nums.length === 0 ? 0 : Math.min(...nums)) },
+    MAX: { minArgs: 1, maxArgs: Infinity, apply: aggregate((nums) => nums.length === 0 ? 0 : Math.max(...nums)) },
+    COUNT: {
+      minArgs: 1,
+      maxArgs: Infinity,
+      apply: (args) => numbersIn(flatten(args)).length
+    },
+    COUNTA: {
+      minArgs: 1,
+      maxArgs: Infinity,
+      apply: (args) => flatten(args).filter((v) => v !== null).length
+    },
+    IF: {
+      minArgs: 2,
+      maxArgs: 3,
+      apply: (args) => {
+        const cond = Array.isArray(args[0]) ? err("#VALUE!", "IF condition cannot be a range") : toBool(args[0] ?? null);
+        if (isError(cond)) return cond;
+        const branch = cond ? args[1] : args.length > 2 ? args[2] : false;
+        if (Array.isArray(branch)) return err("#VALUE!", "IF branch cannot be a range");
+        return branch ?? null;
+      }
+    },
+    AND: {
+      minArgs: 1,
+      maxArgs: Infinity,
+      apply: (args) => {
+        const values = flatten(args);
+        const e = firstError(values);
+        if (e) return e;
+        for (const v of values) {
+          const b = toBool(v);
+          if (isError(b)) return b;
+          if (!b) return false;
+        }
+        return true;
+      }
+    },
+    OR: {
+      minArgs: 1,
+      maxArgs: Infinity,
+      apply: (args) => {
+        const values = flatten(args);
+        const e = firstError(values);
+        if (e) return e;
+        for (const v of values) {
+          const b = toBool(v);
+          if (isError(b)) return b;
+          if (b) return true;
+        }
+        return false;
+      }
+    },
+    NOT: {
+      minArgs: 1,
+      maxArgs: 1,
+      apply: (args) => {
+        const v = Array.isArray(args[0]) ? err("#VALUE!", "NOT of a range") : toBool(args[0] ?? null);
+        if (isError(v)) return v;
+        return !v;
+      }
+    },
+    ABS: { minArgs: 1, maxArgs: 1, apply: numeric1((n) => Math.abs(n)) },
+    SQRT: { minArgs: 1, maxArgs: 1, apply: numeric1((n) => n < 0 ? err("#NUM!", "SQRT of a negative number") : Math.sqrt(n)) },
+    ROUND: {
+      minArgs: 1,
+      maxArgs: 2,
+      apply: (args) => {
+        const n = Array.isArray(args[0]) ? err("#VALUE!") : toNumber(args[0] ?? null);
+        if (typeof n !== "number") return n;
+        const dRaw = args.length > 1 ? Array.isArray(args[1]) ? err("#VALUE!") : toNumber(args[1] ?? null) : 0;
+        if (typeof dRaw !== "number") return dRaw;
+        const f = Math.pow(10, Math.trunc(dRaw));
+        return Math.round((n + Number.EPSILON) * f) / f;
+      }
+    },
+    LEN: {
+      minArgs: 1,
+      maxArgs: 1,
+      apply: (args) => {
+        if (Array.isArray(args[0])) return err("#VALUE!", "LEN of a range");
+        const v = args[0] ?? null;
+        if (isError(v)) return v;
+        return toText(v).length;
+      }
+    },
+    UPPER: {
+      minArgs: 1,
+      maxArgs: 1,
+      apply: (args) => {
+        if (Array.isArray(args[0])) return err("#VALUE!");
+        const v = args[0] ?? null;
+        if (isError(v)) return v;
+        return toText(v).toUpperCase();
+      }
+    },
+    LOWER: {
+      minArgs: 1,
+      maxArgs: 1,
+      apply: (args) => {
+        if (Array.isArray(args[0])) return err("#VALUE!");
+        const v = args[0] ?? null;
+        if (isError(v)) return v;
+        return toText(v).toLowerCase();
+      }
+    },
+    CONCAT: {
+      minArgs: 1,
+      maxArgs: Infinity,
+      apply: (args) => {
+        const values = flatten(args);
+        const e = firstError(values);
+        if (e) return e;
+        return values.map(toText).join("");
+      }
+    }
+  };
+  FUNCTIONS.CONCATENATE = FUNCTIONS.CONCAT;
+
+  // engines/spreadsheet-calc/src/parse.ts
+  var FormulaError = class extends Error {
+  };
+  var OPS = ["<>", "<=", ">=", "=", "<", ">", "+", "-", "*", "/", "^", "&", "(", ")", ",", ":"];
+  function tokenize(src) {
+    const tokens = [];
+    let i = 0;
+    while (i < src.length) {
+      const ch = src[i];
+      if (ch === " " || ch === "	" || ch === "\n") {
+        i++;
+        continue;
+      }
+      if (ch >= "0" && ch <= "9") {
+        const m2 = /^[0-9]+(\.[0-9]+)?([eE][+-]?[0-9]+)?/.exec(src.slice(i));
+        tokens.push({ kind: "num", text: m2[0], pos: i });
+        i += m2[0].length;
+        continue;
+      }
+      if (ch === ".") {
+        const m2 = /^\.[0-9]+([eE][+-]?[0-9]+)?/.exec(src.slice(i));
+        if (m2) {
+          tokens.push({ kind: "num", text: m2[0], pos: i });
+          i += m2[0].length;
+          continue;
+        }
+        throw new FormulaError(`Unexpected '.' at ${i}`);
+      }
+      if (ch === '"') {
+        let j = i + 1;
+        let out = "";
+        for (; ; ) {
+          if (j >= src.length) throw new FormulaError("Unterminated string");
+          if (src[j] === '"') {
+            if (src[j + 1] === '"') {
+              out += '"';
+              j += 2;
+              continue;
+            }
+            break;
+          }
+          out += src[j];
+          j++;
+        }
+        tokens.push({ kind: "str", text: out, pos: i });
+        i = j + 1;
+        continue;
+      }
+      const op = OPS.find((o) => src.startsWith(o, i));
+      if (op) {
+        tokens.push({ kind: "op", text: op, pos: i });
+        i += op.length;
+        continue;
+      }
+      const m = /^[A-Za-z_][A-Za-z0-9_.$]*|^\$[A-Za-z]{1,3}\$?[0-9]+/.exec(src.slice(i));
+      if (m) {
+        tokens.push({ kind: "ident", text: m[0], pos: i });
+        i += m[0].length;
+        continue;
+      }
+      throw new FormulaError(`Unexpected character '${ch}' at ${i}`);
+    }
+    return tokens;
+  }
+  function parseFormula(src) {
+    const tokens = tokenize(src);
+    let pos = 0;
+    const peek = () => tokens[pos] ?? null;
+    const take = () => {
+      const t = tokens[pos];
+      if (!t) throw new FormulaError("Unexpected end of formula");
+      pos++;
+      return t;
+    };
+    const takeOp = (text) => {
+      const t = take();
+      if (t.kind !== "op" || t.text !== text) {
+        throw new FormulaError(`Expected '${text}' at ${t.pos}`);
+      }
+    };
+    function primary() {
+      const t = take();
+      if (t.kind === "num") return { t: "num", v: parseFloat(t.text) };
+      if (t.kind === "str") return { t: "str", v: t.text };
+      if (t.kind === "op" && t.text === "(") {
+        const inner = compare();
+        takeOp(")");
+        return inner;
+      }
+      if (t.kind === "op" && (t.text === "-" || t.text === "+")) {
+        return { t: "un", op: t.text, v: unary() };
+      }
+      if (t.kind === "ident") {
+        const upper = t.text.toUpperCase();
+        if (upper === "TRUE") return { t: "bool", v: true };
+        if (upper === "FALSE") return { t: "bool", v: false };
+        const next = peek();
+        if (next && next.kind === "op" && next.text === "(") {
+          take();
+          const args = [];
+          if (!(peek()?.kind === "op" && peek()?.text === ")")) {
+            for (; ; ) {
+              args.push(compare());
+              const n = peek();
+              if (n && n.kind === "op" && n.text === ",") {
+                take();
+                continue;
+              }
+              break;
+            }
+          }
+          takeOp(")");
+          return { t: "call", name: upper, args };
+        }
+        const addr = parseAddr(t.text);
+        if (addr) {
+          const n = peek();
+          if (n && n.kind === "op" && n.text === ":") {
+            take();
+            const t2 = take();
+            const addr2 = t2.kind === "ident" ? parseAddr(t2.text) : null;
+            if (!addr2) throw new FormulaError(`Expected cell reference after ':' at ${t2.pos}`);
+            return { t: "range", from: addr, to: addr2 };
+          }
+          return { t: "ref", addr };
+        }
+        throw new FormulaError(`Unknown name '${t.text}'`);
+      }
+      throw new FormulaError(`Unexpected token '${t.text}' at ${t.pos}`);
+    }
+    function unary() {
+      const t = peek();
+      if (t && t.kind === "op" && (t.text === "-" || t.text === "+")) {
+        take();
+        return { t: "un", op: t.text, v: unary() };
+      }
+      return primary();
+    }
+    function power() {
+      const base = unary();
+      const t = peek();
+      if (t && t.kind === "op" && t.text === "^") {
+        take();
+        return { t: "bin", op: "^", l: base, r: power() };
+      }
+      return base;
+    }
+    const binLevel = (ops, next) => () => {
+      let left = next();
+      for (; ; ) {
+        const t = peek();
+        if (t && t.kind === "op" && ops.includes(t.text)) {
+          take();
+          left = { t: "bin", op: t.text, l: left, r: next() };
+        } else {
+          return left;
+        }
+      }
+    };
+    const muldiv = binLevel(["*", "/"], power);
+    const addsub = binLevel(["+", "-"], muldiv);
+    const concat = binLevel(["&"], addsub);
+    const compare = binLevel(["=", "<>", "<", "<=", ">", ">="], concat);
+    const ast = compare();
+    if (pos !== tokens.length) {
+      throw new FormulaError(`Unexpected trailing input at ${tokens[pos].pos}`);
+    }
+    return ast;
+  }
+
+  // engines/spreadsheet-calc/src/engine.ts
+  function collectRefs(ast, out) {
+    switch (ast.t) {
+      case "ref":
+        out.add(addrKey(ast.addr));
+        break;
+      case "range":
+        for (const a of rangeAddrs(ast.from, ast.to)) out.add(addrKey(a));
+        break;
+      case "bin":
+        collectRefs(ast.l, out);
+        collectRefs(ast.r, out);
+        break;
+      case "un":
+        collectRefs(ast.v, out);
+        break;
+      case "call":
+        for (const arg of ast.args) collectRefs(arg, out);
+        break;
+      default:
+        break;
+    }
+  }
+  function parseLiteral(input) {
+    const trimmed = input.trim();
+    if (trimmed === "") return null;
+    const upper = trimmed.toUpperCase();
+    if (upper === "TRUE") return true;
+    if (upper === "FALSE") return false;
+    if (/^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?%$/.test(trimmed)) {
+      return Number(trimmed.slice(0, -1)) / 100;
+    }
+    const n = Number(trimmed);
+    if (!Number.isNaN(n) && /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/.test(trimmed)) {
+      return n;
+    }
+    return input;
+  }
+  var Sheet = class {
+    constructor() {
+      __publicField(this, "cells", /* @__PURE__ */ new Map());
+      /** total formula evaluations — exposed so tests can prove incrementality */
+      __publicField(this, "evalCount", 0);
+    }
+    getCell(ref) {
+      const key = typeof ref === "string" ? this.keyOf(ref) : addrKey(ref);
+      if (key === null) return err("#REF!", String(ref));
+      return this.cells.get(key)?.value ?? null;
+    }
+    getInput(ref) {
+      const key = typeof ref === "string" ? this.keyOf(ref) : addrKey(ref);
+      if (key === null) return "";
+      return this.cells.get(key)?.input ?? "";
+    }
+    getDisplay(ref) {
+      const v = this.getCell(ref);
+      if (v === null) return "";
+      if (isError(v)) return v.code;
+      if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
+      if (typeof v === "number") {
+        if (Number.isInteger(v)) return String(v);
+        return String(Math.round(v * 1e10) / 1e10);
+      }
+      return v;
+    }
+    /** All non-empty cells, for persistence. */
+    entries() {
+      const out = [];
+      for (const [key, cell] of this.cells) {
+        if (cell.input !== "") {
+          const [col, row] = key.split(":").map(Number);
+          out.push({ addr: formatAddr({ col, row }), input: cell.input });
+        }
+      }
+      return out;
+    }
+    keyOf(ref) {
+      const addr = parseAddr(ref);
+      return addr ? addrKey(addr) : null;
+    }
+    ensure(key) {
+      let cell = this.cells.get(key);
+      if (!cell) {
+        cell = { input: "", formula: null, value: null, deps: /* @__PURE__ */ new Set(), dependents: /* @__PURE__ */ new Set() };
+        this.cells.set(key, cell);
+      }
+      return cell;
+    }
+    setCell(ref, input) {
+      const key = typeof ref === "string" ? this.keyOf(ref) : addrKey(ref);
+      if (key === null) throw new Error(`Invalid cell reference ${String(ref)}`);
+      const cell = this.ensure(key);
+      for (const dep of cell.deps) this.cells.get(dep)?.dependents.delete(key);
+      cell.deps.clear();
+      cell.input = input;
+      if (input.startsWith("=")) {
+        try {
+          cell.formula = parseFormula(input.slice(1));
+          const refs = /* @__PURE__ */ new Set();
+          collectRefs(cell.formula, refs);
+          cell.deps = refs;
+          for (const dep of refs) this.ensure(dep).dependents.add(key);
+        } catch (e) {
+          cell.formula = null;
+          cell.value = err("#PARSE!", e instanceof FormulaError ? e.message : "parse error");
+          this.propagate(key);
+          return;
+        }
+      } else {
+        cell.formula = null;
+        cell.value = parseLiteral(input);
+        this.propagate(key);
+        return;
+      }
+      this.recalcFrom(key);
+    }
+    /** Recalculate `key` and everything downstream, in dependency order. */
+    recalcFrom(startKey) {
+      const dirty = this.dirtySet(startKey);
+      this.recalcDirty(dirty);
+    }
+    /** Mark downstream of a value change dirty and recalc (the changed cell itself holds a literal). */
+    propagate(changedKey) {
+      const dirty = /* @__PURE__ */ new Set();
+      for (const dep of this.cells.get(changedKey)?.dependents ?? []) {
+        for (const k of this.dirtySet(dep)) dirty.add(k);
+      }
+      this.recalcDirty(dirty);
+    }
+    dirtySet(startKey) {
+      const dirty = /* @__PURE__ */ new Set();
+      const stack = [startKey];
+      while (stack.length > 0) {
+        const key = stack.pop();
+        if (dirty.has(key)) continue;
+        dirty.add(key);
+        for (const dependent of this.cells.get(key)?.dependents ?? []) {
+          stack.push(dependent);
+        }
+      }
+      return dirty;
+    }
+    recalcDirty(dirty) {
+      const state = /* @__PURE__ */ new Map();
+      const inCycle = /* @__PURE__ */ new Set();
+      const visit = (key) => {
+        const s = state.get(key);
+        if (s === "done") return;
+        if (s === "visiting") {
+          inCycle.add(key);
+          return;
+        }
+        state.set(key, "visiting");
+        const cell = this.cells.get(key);
+        if (cell) {
+          for (const dep of cell.deps) {
+            if (dirty.has(dep)) visit(dep);
+            if (inCycle.has(dep) && state.get(dep) !== "done") inCycle.add(key);
+          }
+          if (cell.formula) {
+            if (inCycle.has(key)) {
+              cell.value = err("#CYCLE!", `circular reference at ${this.nameOf(key)}`);
+            } else {
+              this.evalCount++;
+              cell.value = this.evalAst(cell.formula);
+            }
+          }
+        }
+        state.set(key, "done");
+      };
+      for (const key of dirty) visit(key);
+      for (const key of inCycle) {
+        const cell = this.cells.get(key);
+        if (cell?.formula) cell.value = err("#CYCLE!", `circular reference at ${this.nameOf(key)}`);
+      }
+    }
+    nameOf(key) {
+      const [col, row] = key.split(":").map(Number);
+      return formatAddr({ col, row });
+    }
+    evalAst(ast) {
+      switch (ast.t) {
+        case "num":
+          return ast.v;
+        case "str":
+          return ast.v;
+        case "bool":
+          return ast.v;
+        case "ref":
+          return this.cells.get(addrKey(ast.addr))?.value ?? null;
+        case "range":
+          return err("#VALUE!", "a range is only valid as a function argument");
+        case "un": {
+          const v = this.evalAst(ast.v);
+          const n = toNumber(v);
+          if (typeof n !== "number") return n;
+          return ast.op === "-" ? -n : n;
+        }
+        case "bin":
+          return this.evalBin(ast.op, this.evalAst(ast.l), this.evalAst(ast.r));
+        case "call": {
+          const def = FUNCTIONS[ast.name];
+          if (!def) return err("#NAME?", `Unknown function ${ast.name}`);
+          if (ast.args.length < def.minArgs || ast.args.length > def.maxArgs) {
+            return err("#VALUE!", `${ast.name} takes ${def.minArgs}${def.maxArgs === Infinity ? "+" : `\u2013${def.maxArgs}`} arguments`);
+          }
+          const args = ast.args.map(
+            (a) => a.t === "range" ? [...rangeAddrs(a.from, a.to)].map((addr) => this.cells.get(addrKey(addr))?.value ?? null) : this.evalAst(a)
+          );
+          return def.apply(args);
+        }
+      }
+    }
+    evalBin(op, l, r) {
+      if (isError(l)) return l;
+      if (isError(r)) return r;
+      if (op === "&") return toText(l) + toText(r);
+      if (["=", "<>", "<", "<=", ">", ">="].includes(op)) {
+        return this.compare(op, l, r);
+      }
+      const ln = toNumber(l);
+      if (typeof ln !== "number") return ln;
+      const rn = toNumber(r);
+      if (typeof rn !== "number") return rn;
+      switch (op) {
+        case "+":
+          return ln + rn;
+        case "-":
+          return ln - rn;
+        case "*":
+          return ln * rn;
+        case "/":
+          return rn === 0 ? err("#DIV/0!") : ln / rn;
+        case "^": {
+          const v = Math.pow(ln, rn);
+          return Number.isFinite(v) ? v : err("#NUM!");
+        }
+        default:
+          return err("#VALUE!", `unknown operator ${op}`);
+      }
+    }
+    compare(op, l, r) {
+      const a = l ?? 0;
+      const b = r ?? 0;
+      let cmp;
+      if (typeof a === "string" && typeof b === "string") {
+        cmp = a.toLowerCase() < b.toLowerCase() ? -1 : a.toLowerCase() > b.toLowerCase() ? 1 : 0;
+      } else if (typeof a === "string" || typeof b === "string") {
+        cmp = typeof a === "string" ? 1 : -1;
+      } else {
+        const an = typeof a === "boolean" ? a ? 1 : 0 : a;
+        const bn = typeof b === "boolean" ? b ? 1 : 0 : b;
+        cmp = an < bn ? -1 : an > bn ? 1 : 0;
+      }
+      switch (op) {
+        case "=":
+          return cmp === 0;
+        case "<>":
+          return cmp !== 0;
+        case "<":
+          return cmp < 0;
+        case "<=":
+          return cmp <= 0;
+        case ">":
+          return cmp > 0;
+        case ">=":
+          return cmp >= 0;
+        default:
+          return err("#VALUE!");
+      }
+    }
+  };
+
+  // apps/sheets/src/main.ts
+  var COLS = 12;
+  var ROWS = 40;
+  var STORAGE_KEY = "casserole-sheets:v1:default";
+  var sheet = new Sheet();
+  var selected = "A1";
+  var editing = false;
+  var gridEl = document.getElementById("grid");
+  var formulaEl = document.getElementById("formula");
+  var addrEl = document.getElementById("addr");
+  var statusEl = document.getElementById("status");
+  var saveTimer = null;
+  function save() {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(sheet.entries()));
+      statusEl.textContent = `Saved ${(/* @__PURE__ */ new Date()).toLocaleTimeString()}`;
+    } catch {
+      statusEl.textContent = "Autosave unavailable \u2014 export CSV to keep your work";
+    }
+  }
+  function scheduleSave() {
+    if (saveTimer !== null) window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(save, 500);
+  }
+  function restore() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return seed();
+      const entries = JSON.parse(raw);
+      if (entries.length === 0) return seed();
+      for (const { addr, input } of entries) sheet.setCell(addr, input);
+      statusEl.textContent = "Restored sheet";
+    } catch {
+      seed();
+    }
+  }
+  function seed() {
+    const rows = [
+      ["Item", "Qty", "Unit price"],
+      ["Paper", "12", "4.5"],
+      ["Toner", "2", "89"],
+      ["Stapler", "3", "11.25"]
+    ];
+    rows.forEach((cells, r) => {
+      cells.forEach((v, c) => sheet.setCell({ col: c, row: r }, v));
+    });
+    sheet.setCell("D1", "Line total");
+    for (let r = 2; r <= 4; r++) sheet.setCell(`D${r}`, `=B${r}*C${r}`);
+    sheet.setCell("A6", "Total");
+    sheet.setCell("D6", "=SUM(D2:D4)");
+    sheet.setCell("A7", "Average line");
+    sheet.setCell("D7", "=ROUND(AVERAGE(D2:D4), 2)");
+    sheet.setCell("A8", "Over budget?");
+    sheet.setCell("D8", '=IF(D6>300, "YES", "no")');
+  }
+  function buildGrid() {
+    const head = ["<tr><th></th>"];
+    for (let c = 0; c < COLS; c++) head.push(`<th>${colToName(c)}</th>`);
+    head.push("</tr>");
+    const rows = [];
+    for (let r = 0; r < ROWS; r++) {
+      const cells = [`<th>${r + 1}</th>`];
+      for (let c = 0; c < COLS; c++) {
+        cells.push(`<td data-addr="${formatAddr({ col: c, row: r })}"></td>`);
+      }
+      rows.push(`<tr>${cells.join("")}</tr>`);
+    }
+    gridEl.innerHTML = `<thead>${head.join("")}</thead><tbody>${rows.join("")}</tbody>`;
+  }
+  function refreshValues() {
+    gridEl.querySelectorAll("td[data-addr]").forEach((td) => {
+      const addr = td.dataset.addr;
+      const value = sheet.getCell(addr);
+      td.textContent = sheet.getDisplay(addr);
+      td.classList.toggle("error", isError(value));
+      td.classList.toggle("num", typeof value === "number");
+      td.classList.toggle("selected", addr === selected);
+    });
+    addrEl.textContent = selected;
+    if (!editing) formulaEl.value = sheet.getInput(selected);
+  }
+  function select(addr) {
+    selected = addr;
+    editing = false;
+    refreshValues();
+  }
+  function commit(input, move) {
+    sheet.setCell(selected, input);
+    editing = false;
+    const a = parseAddr(selected);
+    if (move === "down" && a.row < ROWS - 1) selected = formatAddr({ col: a.col, row: a.row + 1 });
+    if (move === "right" && a.col < COLS - 1) selected = formatAddr({ col: a.col + 1, row: a.row });
+    refreshValues();
+    scheduleSave();
+  }
+  gridEl.addEventListener("click", (e) => {
+    const td = e.target.closest("td[data-addr]");
+    if (td) {
+      select(td.dataset.addr);
+      formulaEl.focus();
+      formulaEl.select();
+    }
+  });
+  formulaEl.addEventListener("input", () => {
+    editing = true;
+  });
+  formulaEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commit(formulaEl.value, "down");
+      formulaEl.focus();
+    } else if (e.key === "Tab") {
+      e.preventDefault();
+      commit(formulaEl.value, "right");
+      formulaEl.focus();
+    } else if (e.key === "Escape") {
+      editing = false;
+      refreshValues();
+    } else if (["ArrowDown", "ArrowUp", "ArrowLeft", "ArrowRight"].includes(e.key) && !editing) {
+      const a = parseAddr(selected);
+      if (e.key === "ArrowDown" && a.row < ROWS - 1) a.row++;
+      if (e.key === "ArrowUp" && a.row > 0) a.row--;
+      if (e.key === "ArrowRight" && a.col < COLS - 1) a.col++;
+      if (e.key === "ArrowLeft" && a.col > 0) a.col--;
+      e.preventDefault();
+      select(formatAddr(a));
+    }
+  });
+  var hostDownloads = null;
+  if (window.claude?.use) {
+    window.claude.use("downloads").then((d) => {
+      hostDownloads = d;
+    }).catch(() => {
+    });
+  }
+  function csvEscape(text) {
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  }
+  document.getElementById("btn-export-csv")?.addEventListener("click", async () => {
+    let maxRow = 0;
+    let maxCol = 0;
+    for (const { addr } of sheet.entries()) {
+      const a2 = parseAddr(addr);
+      maxRow = Math.max(maxRow, a2.row);
+      maxCol = Math.max(maxCol, a2.col);
+    }
+    const lines = [];
+    for (let r = 0; r <= maxRow; r++) {
+      const cells = [];
+      for (let c = 0; c <= maxCol; c++) {
+        cells.push(csvEscape(sheet.getDisplay(formatAddr({ col: c, row: r }))));
+      }
+      lines.push(cells.join(","));
+    }
+    const blob = new Blob([lines.join("\n") + "\n"], { type: "text/csv" });
+    if (hostDownloads) {
+      try {
+        await hostDownloads.save({ filename: "sheet.csv", data: blob });
+        return;
+      } catch {
+      }
+    }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "sheet.csv";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+  document.getElementById("btn-clear")?.addEventListener("click", () => {
+    if (!window.confirm("Clear the whole sheet? This cannot be undone.")) return;
+    sheet = new Sheet();
+    refreshValues();
+    scheduleSave();
+  });
+  buildGrid();
+  restore();
+  refreshValues();
+  formulaEl.focus();
+})();
