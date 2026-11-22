@@ -1,0 +1,561 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Casserole Slides — vertical slice</title>
+<style>
+  :root { --bg: #efeef4; --panel: #ffffff; --ink: #26222e; --accent: #6b4b9e;
+          --muted: #8d87a0; --line: #dfdce8; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+         background: var(--bg); color: var(--ink); height: 100vh; display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 8px; padding: 10px 16px;
+           background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .logo { font-weight: 700; } .logo em { color: var(--accent); font-style: normal; }
+  button { font: inherit; font-size: 13px; padding: 5px 10px; border: 1px solid var(--line);
+           background: #f9f8fc; border-radius: 6px; cursor: pointer; color: var(--ink); }
+  button:hover { border-color: var(--accent); }
+  .spacer { flex: 1; } #status { font-size: 12px; color: var(--muted); }
+  main { flex: 1; display: flex; min-height: 0; }
+  #thumbs { width: 190px; overflow-y: auto; padding: 12px; display: flex; flex-direction: column;
+            gap: 10px; border-right: 1px solid var(--line); background: var(--panel); }
+  .thumb { position: relative; cursor: pointer; border: 2px solid var(--line); border-radius: 6px;
+           background: #fff; }
+  .thumb.active { border-color: var(--accent); }
+  .thumb .mini { position: relative; width: 160px; height: 90px; overflow: hidden; }
+  .thumb .n { position: absolute; left: 4px; bottom: 2px; font-size: 10px; color: var(--muted); }
+  .canvas-wrap { flex: 1; display: flex; flex-direction: column; align-items: center;
+                 justify-content: center; padding: 20px; gap: 10px; min-width: 0; }
+  #canvas { position: relative; width: min(100%, calc((100vh - 220px) * 16 / 9)); aspect-ratio: 16/9;
+            background: #fff; box-shadow: 0 3px 18px rgba(38,34,46,.15); border-radius: 4px;
+            overflow: hidden; touch-action: none; }
+  .el { position: absolute; }
+  .el.text .t { width: 100%; height: 100%; overflow: hidden; line-height: 1.25; white-space: pre-wrap; }
+  .el.rect { border-radius: 4px; }
+  #canvas .el { cursor: move; }
+  #canvas .el.sel { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .handle { position: absolute; right: -7px; bottom: -7px; width: 12px; height: 12px;
+            background: var(--accent); border-radius: 3px; cursor: nwse-resize; }
+  #props { display: flex; gap: 14px; align-items: center; background: var(--panel);
+           border: 1px solid var(--line); border-radius: 8px; padding: 6px 14px; font-size: 13px;
+           min-height: 38px; flex-wrap: wrap; }
+  #props label { display: flex; gap: 5px; align-items: center; }
+  #props input[type=number] { width: 60px; }
+  #props .hint { color: var(--muted); }
+  #present { position: fixed; inset: 0; background: #111; display: flex; align-items: center;
+             justify-content: center; z-index: 50; cursor: pointer; }
+  #present .stage { position: relative; background: #fff; overflow: hidden; }
+  #present .counter { position: fixed; right: 16px; bottom: 12px; color: #999; font-size: 13px; }
+</style>
+</head>
+<body>
+  <header>
+    <span class="logo">Casserole <em>Slides</em></span>
+    <button id="btn-add-slide" title="New slide">+ Slide</button>
+    <button id="btn-dup-slide" title="Duplicate slide">⧉</button>
+    <button id="btn-del-slide" title="Delete slide">− Slide</button>
+    <button id="btn-add-text" title="Add text box">+ Text</button>
+    <button id="btn-add-rect" title="Add box">+ Box</button>
+    <button id="btn-del-el" title="Delete selected element (Del)">Delete el.</button>
+    <button id="btn-undo" title="Undo (Ctrl/Cmd-Z)">↶</button>
+    <button id="btn-redo" title="Redo (Ctrl/Cmd-Y)">↷</button>
+    <button id="btn-present" title="Present (Esc to exit)">▶ Present</button>
+    <button id="btn-export-json" title="Export native JSON">↓ JSON</button>
+    <span class="spacer"></span>
+    <span id="status">Ready</span>
+  </header>
+  <main>
+    <div id="thumbs"></div>
+    <div class="canvas-wrap">
+      <div id="canvas"></div>
+      <div id="props"></div>
+    </div>
+  </main>
+  <div id="present" hidden><div class="stage"></div><span class="counter"></span></div>
+  <script>
+"use strict";
+(() => {
+  var __defProp = Object.defineProperty;
+  var __defNormalProp = (obj, key, value) => key in obj ? __defProp(obj, key, { enumerable: true, configurable: true, writable: true, value }) : obj[key] = value;
+  var __publicField = (obj, key, value) => __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+
+  // engines/presentation-model/src/model.ts
+  var DECK_SCHEMA_VERSION = "1.0";
+  var CANVAS_W = 1600;
+  var CANVAS_H = 900;
+  var counter = 0;
+  function newElemId() {
+    counter += 1;
+    return `e${Date.now().toString(36)}-${counter.toString(36)}`;
+  }
+  function newSlide(elements = []) {
+    return { id: newElemId(), elements };
+  }
+  function newDeck() {
+    return {
+      schemaVersion: DECK_SCHEMA_VERSION,
+      slides: [
+        newSlide([
+          textElement({ x: 160, y: 300, w: 1280, h: 160, text: "Title slide", size: 88, bold: true, align: "center" }),
+          textElement({ x: 160, y: 500, w: 1280, h: 80, text: "Subtitle", size: 40, align: "center", color: "#666666" })
+        ])
+      ]
+    };
+  }
+  function textElement(props) {
+    return {
+      id: newElemId(),
+      kind: "text",
+      text: "Text",
+      size: 36,
+      bold: false,
+      align: "left",
+      color: "#222222",
+      ...props
+    };
+  }
+  function rectElement(props) {
+    return { id: newElemId(), kind: "rect", fill: "#dbe7f0", ...props };
+  }
+  function addSlide(deck2, afterIndex) {
+    const slide = newSlide([
+      textElement({ x: 120, y: 80, w: 1360, h: 110, text: "Slide title", size: 60, bold: true }),
+      textElement({ x: 120, y: 260, w: 1360, h: 540, text: "Body text", size: 36 })
+    ]);
+    const at = Math.min(Math.max(afterIndex + 1, 0), deck2.slides.length);
+    deck2.slides.splice(at, 0, slide);
+    return at;
+  }
+  function removeSlide(deck2, index) {
+    if (deck2.slides.length <= 1) {
+      deck2.slides[0] = newSlide();
+      return;
+    }
+    deck2.slides.splice(index, 1);
+  }
+  function duplicateSlide(deck2, index) {
+    const src = deck2.slides[index];
+    if (!src) return index;
+    const copy = {
+      id: newElemId(),
+      elements: src.elements.map((e) => ({ ...e, id: newElemId() }))
+    };
+    deck2.slides.splice(index + 1, 0, copy);
+    return index + 1;
+  }
+  function addElement(deck2, slideIndex, element) {
+    deck2.slides[slideIndex]?.elements.push(element);
+  }
+  function removeElement(deck2, slideIndex, elementId) {
+    const slide = deck2.slides[slideIndex];
+    if (!slide) return;
+    slide.elements = slide.elements.filter((e) => e.id !== elementId);
+  }
+  function updateElement(deck2, slideIndex, elementId, patch) {
+    const el = deck2.slides[slideIndex]?.elements.find((e) => e.id === elementId);
+    if (!el) return;
+    Object.assign(el, patch, { id: el.id, kind: el.kind });
+    clampElement(el);
+  }
+  function clampElement(el) {
+    el.w = Math.max(40, Math.min(el.w, CANVAS_W));
+    el.h = Math.max(40, Math.min(el.h, CANVAS_H));
+    el.x = Math.max(0, Math.min(el.x, CANVAS_W - el.w));
+    el.y = Math.max(0, Math.min(el.y, CANVAS_H - el.h));
+  }
+  function validateDeck(deck2) {
+    const errors = [];
+    if (deck2.schemaVersion !== DECK_SCHEMA_VERSION) errors.push(`unsupported schemaVersion ${deck2.schemaVersion}`);
+    if (deck2.slides.length === 0) errors.push("deck has no slides");
+    const ids = /* @__PURE__ */ new Set();
+    deck2.slides.forEach((s, si) => {
+      if (ids.has(s.id)) errors.push(`duplicate slide id ${s.id}`);
+      ids.add(s.id);
+      s.elements.forEach((e) => {
+        if (ids.has(e.id)) errors.push(`duplicate element id ${e.id}`);
+        ids.add(e.id);
+        if (e.kind !== "text" && e.kind !== "rect") errors.push(`slide ${si}: unknown element kind`);
+        if (e.x < 0 || e.y < 0 || e.x + e.w > CANVAS_W || e.y + e.h > CANVAS_H) {
+          errors.push(`slide ${si}: element ${e.id} outside canvas`);
+        }
+      });
+    });
+    return errors;
+  }
+  function deckToJSON(deck2) {
+    return JSON.stringify(deck2, null, 2);
+  }
+  function deckFromJSON(json) {
+    const deck2 = JSON.parse(json);
+    const errors = validateDeck(deck2);
+    if (errors.length > 0) throw new Error(`Invalid deck: ${errors.join("; ")}`);
+    return deck2;
+  }
+
+  // engines/document-model/src/history.ts
+  var COALESCE_MS = 1e3;
+  function clone(model) {
+    return typeof structuredClone === "function" ? structuredClone(model) : JSON.parse(JSON.stringify(model));
+  }
+  var History = class {
+    constructor(limit = 200) {
+      __publicField(this, "undoStack", []);
+      __publicField(this, "redoStack", []);
+      __publicField(this, "limit");
+      this.limit = limit;
+    }
+    /** Record the pre-change state. Call before applying a transaction. */
+    checkpoint(model, key = null, now = Date.now()) {
+      const top = this.undoStack[this.undoStack.length - 1];
+      if (key !== null && top && top.key === key && now - top.at < COALESCE_MS) {
+        top.at = now;
+        this.redoStack = [];
+        return;
+      }
+      this.undoStack.push({ model: clone(model), key, at: now });
+      if (this.undoStack.length > this.limit) this.undoStack.shift();
+      this.redoStack = [];
+    }
+    canUndo() {
+      return this.undoStack.length > 0;
+    }
+    canRedo() {
+      return this.redoStack.length > 0;
+    }
+    /** Returns the model state to restore, or null. `current` goes to the redo stack. */
+    undo(current2) {
+      const entry = this.undoStack.pop();
+      if (!entry) return null;
+      this.redoStack.push({ model: clone(current2), key: null, at: Date.now() });
+      return clone(entry.model);
+    }
+    redo(current2) {
+      const entry = this.redoStack.pop();
+      if (!entry) return null;
+      this.undoStack.push({ model: clone(current2), key: null, at: Date.now() });
+      return clone(entry.model);
+    }
+  };
+
+  // apps/slides/src/main.ts
+  var STORAGE_KEY = "casserole-slides:v1:default";
+  var deck = newDeck();
+  var current = 0;
+  var selectedId = null;
+  var history = new History();
+  var thumbsEl = document.getElementById("thumbs");
+  var canvasEl = document.getElementById("canvas");
+  var statusEl = document.getElementById("status");
+  var presentEl = document.getElementById("present");
+  var propsEl = document.getElementById("props");
+  var saveTimer = null;
+  function save() {
+    try {
+      localStorage.setItem(STORAGE_KEY, deckToJSON(deck));
+      statusEl.textContent = `Saved ${(/* @__PURE__ */ new Date()).toLocaleTimeString()}`;
+    } catch {
+      statusEl.textContent = "Autosave unavailable \u2014 export JSON to keep your work";
+    }
+  }
+  function scheduleSave() {
+    if (saveTimer !== null) window.clearTimeout(saveTimer);
+    saveTimer = window.setTimeout(save, 500);
+  }
+  function restore() {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (raw) {
+        deck = deckFromJSON(raw);
+        statusEl.textContent = "Restored deck";
+        return;
+      }
+    } catch {
+      statusEl.textContent = "Stored deck unreadable; started fresh (storage left untouched until next save)";
+    }
+    deck = newDeck();
+    addSlide(deck, 0);
+    updateElement(deck, 1, deck.slides[1].elements[0].id, { text: "Why Casserole Slides" });
+    updateElement(deck, 1, deck.slides[1].elements[1].id, {
+      text: "\u2022 Real editable elements, not images\n\u2022 Drag to move, handle to resize\n\u2022 Double-click any text to edit\n\u2022 Undo/redo, autosave, present mode (\u25B6)"
+    });
+  }
+  function elementHtml(el, scale, selected) {
+    const style = `left:${el.x * scale}px;top:${el.y * scale}px;width:${el.w * scale}px;height:${el.h * scale}px;`;
+    if (el.kind === "rect") {
+      return `<div class="el rect${selected ? " sel" : ""}" data-id="${el.id}" style="${style}background:${el.fill ?? "#dbe7f0"}"></div>`;
+    }
+    const textStyle = `font-size:${(el.size ?? 36) * scale}px;font-weight:${el.bold ? 700 : 400};text-align:${el.align ?? "left"};color:${el.color ?? "#222"};`;
+    const text = (el.text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/\n/g, "<br>");
+    return `<div class="el text${selected ? " sel" : ""}" data-id="${el.id}" style="${style}"><div class="t" style="${textStyle}">${text}</div>` + (selected ? `<div class="handle" data-handle="${el.id}"></div>` : "") + `</div>`;
+  }
+  function slideHtml(index, scale, selectable) {
+    const slide = deck.slides[index];
+    if (!slide) return "";
+    return slide.elements.map((el) => elementHtml(el, scale, selectable && el.id === selectedId)).join("");
+  }
+  function render() {
+    const scale = canvasEl.clientWidth / CANVAS_W;
+    canvasEl.innerHTML = slideHtml(current, scale, true);
+    thumbsEl.innerHTML = deck.slides.map(
+      (s, i) => `<div class="thumb${i === current ? " active" : ""}" data-slide="${i}"><div class="mini">${slideHtml(i, 160 / CANVAS_W, false)}</div><span class="n">${i + 1}</span></div>`
+    ).join("");
+    renderProps();
+    const errors = validateDeck(deck);
+    if (errors.length > 0) {
+      console.error("DECK INVARIANT VIOLATION:", errors);
+      statusEl.textContent = "\u26A0 internal model error \u2014 see console";
+    }
+  }
+  function selectedElement() {
+    return deck.slides[current]?.elements.find((e) => e.id === selectedId) ?? null;
+  }
+  function renderProps() {
+    const el = selectedElement();
+    if (!el) {
+      propsEl.innerHTML = `<span class="hint">Select an element \u2014 or double-click text to edit it</span>`;
+      return;
+    }
+    if (el.kind === "text") {
+      propsEl.innerHTML = `<label>Size <input id="p-size" type="number" min="12" max="200" value="${el.size ?? 36}"></label><label><input id="p-bold" type="checkbox" ${el.bold ? "checked" : ""}> Bold</label><label>Align <select id="p-align">` + ["left", "center", "right"].map((a) => `<option ${a === (el.align ?? "left") ? "selected" : ""}>${a}</option>`).join("") + `</select></label><label>Color <input id="p-color" type="color" value="${el.color ?? "#222222"}"></label>`;
+    } else {
+      propsEl.innerHTML = `<label>Fill <input id="p-fill" type="color" value="${el.fill ?? "#dbe7f0"}"></label>`;
+    }
+    const patch = (p) => {
+      history.checkpoint(deck, "props");
+      updateElement(deck, current, el.id, p);
+      render();
+      scheduleSave();
+    };
+    document.getElementById("p-size")?.addEventListener(
+      "change",
+      (e) => patch({ size: Number(e.target.value) || 36 })
+    );
+    document.getElementById("p-bold")?.addEventListener(
+      "change",
+      (e) => patch({ bold: e.target.checked })
+    );
+    document.getElementById("p-align")?.addEventListener(
+      "change",
+      (e) => patch({ align: e.target.value })
+    );
+    document.getElementById("p-color")?.addEventListener(
+      "change",
+      (e) => patch({ color: e.target.value })
+    );
+    document.getElementById("p-fill")?.addEventListener(
+      "change",
+      (e) => patch({ fill: e.target.value })
+    );
+  }
+  var drag = null;
+  canvasEl.addEventListener("pointerdown", (e) => {
+    const handle = e.target.closest("[data-handle]");
+    const elDiv = e.target.closest(".el");
+    const scale = canvasEl.clientWidth / CANVAS_W;
+    if (handle) {
+      const el = selectedElement();
+      if (!el) return;
+      drag = { id: el.id, mode: "resize", startX: e.clientX, startY: e.clientY, orig: { ...el }, moved: false };
+      canvasEl.setPointerCapture(e.pointerId);
+      return;
+    }
+    if (elDiv) {
+      const id = elDiv.dataset.id;
+      if (selectedId !== id) {
+        selectedId = id;
+        render();
+      }
+      const el = selectedElement();
+      if (!el) return;
+      drag = { id, mode: "move", startX: e.clientX, startY: e.clientY, orig: { ...el }, moved: false };
+      canvasEl.setPointerCapture(e.pointerId);
+    } else {
+      selectedId = null;
+      render();
+    }
+  });
+  canvasEl.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const el = deck.slides[current]?.elements.find((x) => x.id === drag.id);
+    if (!el) return;
+    const scale = canvasEl.clientWidth / CANVAS_W;
+    const dx = (e.clientX - drag.startX) / scale;
+    const dy = (e.clientY - drag.startY) / scale;
+    if (!drag.moved && (Math.abs(dx) > 2 || Math.abs(dy) > 2)) {
+      history.checkpoint(deck, "drag-" + drag.id);
+      drag.moved = true;
+    }
+    if (!drag.moved) return;
+    if (drag.mode === "move") {
+      el.x = drag.orig.x + dx;
+      el.y = drag.orig.y + dy;
+    } else {
+      el.w = drag.orig.w + dx;
+      el.h = drag.orig.h + dy;
+    }
+    clampElement(el);
+    render();
+  });
+  canvasEl.addEventListener("pointerup", () => {
+    if (drag?.moved) scheduleSave();
+    drag = null;
+  });
+  canvasEl.addEventListener("dblclick", (e) => {
+    const elDiv = e.target.closest(".el.text");
+    if (!elDiv) return;
+    const el = deck.slides[current]?.elements.find((x) => x.id === elDiv.dataset.id);
+    if (!el) return;
+    const value = window.prompt("Edit text (\\n for line breaks preserved):", el.text ?? "");
+    if (value === null) return;
+    history.checkpoint(deck);
+    updateElement(deck, current, el.id, { text: value });
+    render();
+    scheduleSave();
+  });
+  thumbsEl.addEventListener("click", (e) => {
+    const t = e.target.closest("[data-slide]");
+    if (!t) return;
+    current = Number(t.dataset.slide);
+    selectedId = null;
+    render();
+  });
+  function cmd(fn) {
+    history.checkpoint(deck);
+    fn();
+    render();
+    scheduleSave();
+  }
+  document.getElementById("btn-add-slide")?.addEventListener(
+    "click",
+    () => cmd(() => {
+      current = addSlide(deck, current);
+      selectedId = null;
+    })
+  );
+  document.getElementById("btn-dup-slide")?.addEventListener(
+    "click",
+    () => cmd(() => {
+      current = duplicateSlide(deck, current);
+      selectedId = null;
+    })
+  );
+  document.getElementById("btn-del-slide")?.addEventListener("click", () => {
+    if (!window.confirm("Delete this slide?")) return;
+    cmd(() => {
+      removeSlide(deck, current);
+      current = Math.min(current, deck.slides.length - 1);
+      selectedId = null;
+    });
+  });
+  document.getElementById("btn-add-text")?.addEventListener(
+    "click",
+    () => cmd(() => {
+      const el = textElement({ x: 400, y: 350, w: 800, h: 150, text: "New text" });
+      addElement(deck, current, el);
+      selectedId = el.id;
+    })
+  );
+  document.getElementById("btn-add-rect")?.addEventListener(
+    "click",
+    () => cmd(() => {
+      const el = rectElement({ x: 500, y: 300, w: 600, h: 300 });
+      addElement(deck, current, el);
+      selectedId = el.id;
+    })
+  );
+  document.getElementById("btn-del-el")?.addEventListener("click", () => {
+    if (!selectedId) return;
+    cmd(() => {
+      removeElement(deck, current, selectedId);
+      selectedId = null;
+    });
+  });
+  document.getElementById("btn-undo")?.addEventListener("click", () => {
+    const prev = history.undo(deck);
+    if (prev) {
+      deck = prev;
+      current = Math.min(current, deck.slides.length - 1);
+      selectedId = null;
+      render();
+      scheduleSave();
+    }
+  });
+  document.getElementById("btn-redo")?.addEventListener("click", () => {
+    const next = history.redo(deck);
+    if (next) {
+      deck = next;
+      current = Math.min(current, deck.slides.length - 1);
+      selectedId = null;
+      render();
+      scheduleSave();
+    }
+  });
+  document.addEventListener("keydown", (e) => {
+    if (!presentEl.hidden) {
+      if (e.key === "ArrowRight" || e.key === " " || e.key === "PageDown") showPresent(presentIndex + 1);
+      else if (e.key === "ArrowLeft" || e.key === "PageUp") showPresent(presentIndex - 1);
+      else if (e.key === "Escape") exitPresent();
+      e.preventDefault();
+      return;
+    }
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod && e.key.toLowerCase() === "z" && !e.shiftKey) {
+      e.preventDefault();
+      document.getElementById("btn-undo").click();
+    } else if (mod && (e.key.toLowerCase() === "y" || e.key.toLowerCase() === "z" && e.shiftKey)) {
+      e.preventDefault();
+      document.getElementById("btn-redo").click();
+    } else if ((e.key === "Delete" || e.key === "Backspace") && selectedId && e.target.tagName !== "INPUT") {
+      e.preventDefault();
+      document.getElementById("btn-del-el").click();
+    }
+  });
+  var presentIndex = 0;
+  function showPresent(index) {
+    presentIndex = Math.max(0, Math.min(index, deck.slides.length - 1));
+    const stage = presentEl.querySelector(".stage");
+    const scale = Math.min(window.innerWidth / CANVAS_W, window.innerHeight / CANVAS_H) * 0.94;
+    stage.style.width = `${CANVAS_W * scale}px`;
+    stage.style.height = `${CANVAS_H * scale}px`;
+    stage.innerHTML = deck.slides[presentIndex].elements.map((el) => elementHtml(el, scale, false)).join("");
+    presentEl.querySelector(".counter").textContent = `${presentIndex + 1} / ${deck.slides.length}`;
+  }
+  function exitPresent() {
+    presentEl.hidden = true;
+  }
+  document.getElementById("btn-present")?.addEventListener("click", () => {
+    presentEl.hidden = false;
+    showPresent(current);
+  });
+  presentEl.addEventListener("click", () => showPresent(presentIndex + 1));
+  var hostDownloads = null;
+  if (window.claude?.use) {
+    window.claude.use("downloads").then((d) => {
+      hostDownloads = d;
+    }).catch(() => {
+    });
+  }
+  document.getElementById("btn-export-json")?.addEventListener("click", async () => {
+    const blob = new Blob([deckToJSON(deck)], { type: "application/json" });
+    if (hostDownloads) {
+      try {
+        await hostDownloads.save({ filename: "deck.json", data: blob });
+        return;
+      } catch {
+      }
+    }
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "deck.json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+  restore();
+  render();
+  window.addEventListener("resize", render);
+})();
+
+</script>
+</body>
+</html>

@@ -5,7 +5,7 @@
   "description": "Office Casserole — AI-native productivity suite. Phase 0/1 platform foundation + Phase 2 Casserole Write vertical slice.",
   "scripts": {
     "build:engine": "tsc -p tsconfig.json",
-    "test": "npm run build:engine && node --test build/engines/*/test/*.test.js && node scripts/smoke-write.mjs && node scripts/smoke-sheets.mjs",
+    "test": "npm run build:engine && node --test build/engines/*/test/*.test.js && node scripts/smoke-write.mjs && node scripts/smoke-sheets.mjs && node scripts/smoke-slides.mjs",
     "build:apps": "node scripts/build-apps.mjs",
     "build": "npm run build:engine && npm run build:apps"
   },

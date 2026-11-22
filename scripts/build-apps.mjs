@@ -2,7 +2,7 @@
 import { build } from "esbuild";
 import { mkdir, readFile, writeFile, copyFile } from "node:fs/promises";
 
-const apps = ["write", "sheets"];
+const apps = ["write", "sheets", "slides"];
 
 for (const app of apps) {
   const out = `apps/${app}/dist`;

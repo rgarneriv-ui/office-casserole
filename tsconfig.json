@@ -19,6 +19,8 @@
     "engines/spreadsheet-calc/test/**/*.ts",
     "engines/pdf-engine/src/**/*.ts",
     "engines/pdf-engine/test/**/*.ts",
+    "engines/presentation-model/src/**/*.ts",
+    "engines/presentation-model/test/**/*.ts",
     "packages/shared-types/src/**/*.ts"
   ]
 }

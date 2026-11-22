@@ -7,8 +7,9 @@
 
 import { DocModel } from "./types";
 
-export interface HistoryEntry {
-  model: DocModel;
+
+export interface HistoryEntry<T> {
+  model: T;
   /** Coalescing key: consecutive checkpoints with the same key within the
    *  coalescing window collapse into one undo step. */
   key: string | null;
@@ -17,15 +18,15 @@ export interface HistoryEntry {
 
 const COALESCE_MS = 1000;
 
-function clone(model: DocModel): DocModel {
+function clone<T>(model: T): T {
   return typeof structuredClone === "function"
     ? structuredClone(model)
-    : (JSON.parse(JSON.stringify(model)) as DocModel);
+    : (JSON.parse(JSON.stringify(model)) as T);
 }
 
-export class History {
-  private undoStack: HistoryEntry[] = [];
-  private redoStack: HistoryEntry[] = [];
+export class History<T = DocModel> {
+  private undoStack: HistoryEntry<T>[] = [];
+  private redoStack: HistoryEntry<T>[] = [];
   private limit: number;
 
   constructor(limit = 200) {
@@ -33,7 +34,7 @@ export class History {
   }
 
   /** Record the pre-change state. Call before applying a transaction. */
-  checkpoint(model: DocModel, key: string | null = null, now = Date.now()): void {
+  checkpoint(model: T, key: string | null = null, now = Date.now()): void {
     const top = this.undoStack[this.undoStack.length - 1];
     if (key !== null && top && top.key === key && now - top.at < COALESCE_MS) {
       top.at = now; // extend the coalescing window; keep the earlier snapshot
@@ -54,14 +55,14 @@ export class History {
   }
 
   /** Returns the model state to restore, or null. `current` goes to the redo stack. */
-  undo(current: DocModel): DocModel | null {
+  undo(current: T): T | null {
     const entry = this.undoStack.pop();
     if (!entry) return null;
     this.redoStack.push({ model: clone(current), key: null, at: Date.now() });
     return clone(entry.model);
   }
 
-  redo(current: DocModel): DocModel | null {
+  redo(current: T): T | null {
     const entry = this.redoStack.pop();
     if (!entry) return null;
     this.undoStack.push({ model: clone(current), key: null, at: Date.now() });
