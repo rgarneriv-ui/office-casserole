@@ -30,6 +30,8 @@ export type PrimOp =
       offset: number;
       newBlockId: string;
       newBlockType: BlockType;
+      /** list indent of the created block (undefined = none) */
+      newIndent?: number;
       /** type of the block being split (bookkeeping for the inverse) */
       origType: BlockType;
     }
@@ -41,9 +43,17 @@ export type PrimOp =
       seam: number;
       removedId: string;
       removedType: BlockType;
+      removedIndent?: number;
       prevType: BlockType;
     }
-  | { t: "set-block-type"; block: number; before: BlockType; after: BlockType }
+  | {
+      t: "set-block-type";
+      block: number;
+      before: BlockType;
+      after: BlockType;
+      beforeIndent?: number;
+      afterIndent?: number;
+    }
   | {
       t: "set-table";
       block: number;
@@ -93,6 +103,7 @@ export function applyOp(model: DocModel, op: PrimOp): void {
       block.runs = left;
       normalizeBlock(block);
       const next: Block = { id: op.newBlockId, type: op.newBlockType, runs: right };
+      if (op.newIndent !== undefined && op.newIndent > 0) next.indent = op.newIndent;
       normalizeBlock(next);
       model.blocks.splice(op.block + 1, 0, next);
       break;
@@ -110,6 +121,11 @@ export function applyOp(model: DocModel, op: PrimOp): void {
       const block = model.blocks[op.block];
       if (!block) throw new Error(`applyOp: no block ${op.block}`);
       block.type = op.after;
+      if (op.afterIndent !== undefined && op.afterIndent > 0 && (op.after === "bullet" || op.after === "numbered")) {
+        block.indent = op.afterIndent;
+      } else {
+        delete block.indent;
+      }
       break;
     }
     case "set-table": {
@@ -149,8 +165,8 @@ export function invertOp(op: PrimOp): PrimOp {
         before: op.after,
         after: op.before,
       };
-    case "split-block":
-      return {
+    case "split-block": {
+      const inv: PrimOp = {
         t: "merge-blocks",
         block: op.block + 1,
         seam: op.offset,
@@ -158,8 +174,11 @@ export function invertOp(op: PrimOp): PrimOp {
         removedType: op.newBlockType,
         prevType: op.origType,
       };
-    case "merge-blocks":
-      return {
+      if (op.newIndent !== undefined) inv.removedIndent = op.newIndent;
+      return inv;
+    }
+    case "merge-blocks": {
+      const inv: PrimOp = {
         t: "split-block",
         block: op.block - 1,
         offset: op.seam,
@@ -167,8 +186,15 @@ export function invertOp(op: PrimOp): PrimOp {
         newBlockType: op.removedType,
         origType: op.prevType,
       };
-    case "set-block-type":
-      return { t: "set-block-type", block: op.block, before: op.after, after: op.before };
+      if (op.removedIndent !== undefined) inv.newIndent = op.removedIndent;
+      return inv;
+    }
+    case "set-block-type": {
+      const inv: PrimOp = { t: "set-block-type", block: op.block, before: op.after, after: op.before };
+      if (op.afterIndent !== undefined) inv.beforeIndent = op.afterIndent;
+      if (op.beforeIndent !== undefined) inv.afterIndent = op.beforeIndent;
+      return inv;
+    }
     case "set-table":
       return {
         t: "set-table",

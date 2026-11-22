@@ -157,7 +157,7 @@ test("docx: numPr without resolvable numbering imports as numbered with a warnin
   const docXml =
     `<?xml version="1.0"?>` +
     `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>` +
-    `<w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="77"/></w:numPr></w:pPr>` +
+    `<w:p><w:pPr><w:numPr><w:ilvl w:val="5"/><w:numId w:val="77"/></w:numPr></w:pPr>` +
     `<w:r><w:t>mystery item</w:t></w:r></w:p>` +
     `<w:sectPr/></w:body></w:document>`;
   const bytes = await zipWrite([
@@ -166,6 +166,7 @@ test("docx: numPr without resolvable numbering imports as numbered with a warnin
   ]);
   const { model, report } = await importDocx(bytes, parseXml);
   assert.equal(model.blocks[0]!.type, "numbered");
+  assert.equal(model.blocks[0]!.indent, 3, "deep level clamps to 3");
   const codes = report.warnings.map((w) => w.code);
   assert.ok(codes.includes("DOCX-IMPORT-NUMBERING"));
   assert.ok(codes.includes("DOCX-IMPORT-LIST-LEVEL"));
@@ -210,4 +211,25 @@ test("docx: foreign tables with spans/formatting import with warnings, not flatt
   const codes = report.warnings.map((w) => w.code);
   assert.ok(codes.includes("DOCX-IMPORT-TABLE-SPAN"));
   assert.ok(codes.includes("DOCX-IMPORT-TABLE-FORMATTING"));
+});
+
+test("docx: nested lists round-trip ilvl and multi-level definitions", async () => {
+  const d: DocModel = { schemaVersion: SCHEMA_VERSION, blocks: [
+    newBlock("numbered", [{ text: "top", marks: [] }]),
+    newBlock("numbered", [{ text: "sub", marks: [] }]),
+    newBlock("bullet", [{ text: "deep bullet", marks: [] }]),
+  ]};
+  d.blocks[1]!.indent = 1;
+  d.blocks[2]!.indent = 2;
+  const { bytes } = await exportDocx(d);
+  const entries = await zipRead(bytes);
+  const docXml = new TextDecoder().decode(entries.find((e) => e.name === "word/document.xml")!.data);
+  assert.ok(docXml.includes('<w:ilvl w:val="1"/>'));
+  assert.ok(docXml.includes('<w:ilvl w:val="2"/>'));
+  const numbering = new TextDecoder().decode(entries.find((e) => e.name === "word/numbering.xml")!.data);
+  assert.ok(numbering.includes('w:val="lowerLetter"'), "level-1 alpha defined");
+  assert.ok(numbering.includes('w:val="lowerRoman"'), "level-2 roman defined");
+  const { model, report } = await importDocx(bytes, parseXml);
+  assert.equal(report.lossless, true, JSON.stringify(report.warnings));
+  assert.deepEqual(model.blocks.map((b) => [b.type, b.indent ?? 0]), [["numbered", 0], ["numbered", 1], ["bullet", 2]]);
 });

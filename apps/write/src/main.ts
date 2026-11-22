@@ -34,6 +34,7 @@ import {
   normRange,
   rangeHasMark,
   setBlockType,
+  setListIndent,
   splitBlock,
   toggleMark,
   toHTML,
@@ -44,6 +45,7 @@ import {
 
 import { DocumentStore, StoredRevision, newDocId, openBestStore } from "./store";
 import { diffModels, diffSummary } from "../../../engines/document-model/src/diff";
+import { BULLET_GLYPHS, ListCounter } from "../../../engines/document-model/src/listmarks";
 import { DocumentJournal, OpTransaction } from "../../../engines/document-model/src/journal";
 import { PrimOp } from "../../../engines/document-model/src/oplog";
 import { CommandDefinition } from "../../../packages/shared-types/src/resource";
@@ -57,6 +59,7 @@ let model: DocModel = newDocument();
 let selection: DocRange = { anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 0 } };
 let caretMarks: Mark[] | null = null; // pending marks for a collapsed caret
 let activeTableBlock: number | null = null;
+let listLabels: string[] = [];
 const log = new TransactionLog();
 
 // ---------- authorship + journal (§14.1, live wiring per ADR-0010) ----------
@@ -255,8 +258,10 @@ function renderBlock(block: Block, index: number): string {
     return `<div class="tbl-wrap" contenteditable="false" data-block="${index}"><table class="cas-table">${rows}</table>${controls}</div>`;
   }
   const tag = BLOCK_TAG[block.type] ?? "p";
-  const listCls =
-    block.type === "bullet" ? ' class="li-bullet"' : block.type === "numbered" ? ' class="li-numbered"' : "";
+  const isListBlock = block.type === "bullet" || block.type === "numbered";
+  const listCls = isListBlock
+    ? ` class="li-item" data-label="${listLabels[index] ?? ""}" style="margin-left:${34 + (Math.min(3, block.indent ?? 0)) * 26}px"`
+    : "";
   const inner =
     block.runs
       .map((run) => {
@@ -272,6 +277,13 @@ function renderBlock(block: Block, index: number): string {
 }
 
 function render(): void {
+  const lc = new ListCounter();
+  listLabels = model.blocks.map((b) => {
+    const lvl = Math.min(3, b.indent ?? 0);
+    const marker = lc.next(b.type, lvl);
+    if (b.type === "bullet") return BULLET_GLYPHS[lvl]!;
+    return marker ?? "";
+  });
   editor.innerHTML = model.blocks.map(renderBlock).join("");
   writeSelection();
   renderCodes();
@@ -374,6 +386,8 @@ function updateExplain(): void {
 
 // ---------- command dispatch (§18.2) ----------
 type CommandId =
+  | "indentList"
+  | "outdentList"
   | "insertTable"
   | "insertText"
   | "deleteBackward"
@@ -476,6 +490,12 @@ function dispatch(id: CommandId, payload?: unknown): void {
       toggleMark(model, selection, mark, log);
       break;
     }
+    case "indentList":
+      setListIndent(model, selection, 1, log);
+      break;
+    case "outdentList":
+      setListIndent(model, selection, -1, log);
+      break;
     case "insertTable": {
       const cur = model.blocks[selection.focus.block];
       if (cur?.type === "table") break; // no tables inside tables in v0
@@ -549,6 +569,15 @@ editor.addEventListener("beforeinput", (e: InputEvent) => {
 });
 
 editor.addEventListener("keydown", (e: KeyboardEvent) => {
+  if (e.key === "Tab") {
+    readSelection();
+    const cur = model.blocks[selection.focus.block];
+    if (cur && (cur.type === "bullet" || cur.type === "numbered")) {
+      e.preventDefault();
+      dispatch(e.shiftKey ? "outdentList" : "indentList");
+      return;
+    }
+  }
   const mod = e.ctrlKey || e.metaKey;
   if (!mod) return;
   const k = e.key.toLowerCase();
@@ -1125,6 +1154,20 @@ const COMMANDS: CommandDefinition[] = [
   blockCmd("heading2", "Heading 2"),
   blockCmd("bullet", "Bulleted list"),
   blockCmd("numbered", "Numbered list"),
+  {
+    id: "list.indent", name: "Increase list indent", description: "Nest the list item one level deeper (Tab)",
+    isPermitted: () => true,
+    isAvailable: () => ["bullet", "numbered"].includes(model.blocks[selection.focus.block]?.type ?? ""),
+    undoable: true, shortcut: "Tab", auditClassification: "document-modification",
+    run: () => dispatch("indentList"),
+  },
+  {
+    id: "list.outdent", name: "Decrease list indent", description: "Un-nest the list item (Shift-Tab)",
+    isPermitted: () => true,
+    isAvailable: () => ["bullet", "numbered"].includes(model.blocks[selection.focus.block]?.type ?? ""),
+    undoable: true, shortcut: "Shift-Tab", auditClassification: "document-modification",
+    run: () => dispatch("outdentList"),
+  },
   {
     id: "edit.undo", name: "Undo", description: "Undo the last transaction",
     isPermitted: () => true, isAvailable: () => log.canUndo(), undoable: false,

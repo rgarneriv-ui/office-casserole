@@ -6,6 +6,7 @@
 
 import { DocModel, SCHEMA_VERSION } from "./types";
 import { normalizeModel, validateModel } from "./model";
+import { ListCounter } from "./listmarks";
 
 export interface LossWarning {
   code: string;
@@ -66,16 +67,28 @@ function runsHtml(block: { runs: { text: string; marks: string[] }[] }): string 
 
 export function toHTML(model: DocModel): string {
   const parts: string[] = [];
-  let openList: "ul" | "ol" | null = null;
-  const closeList = () => {
-    if (openList) {
-      parts.push(`</${openList}>`);
-      openList = null;
+  // stack of open lists: each entry is its tag; an <li> stays open until its
+  // subtree (deeper lists) closes, so nesting is valid HTML
+  const stack: { tag: "ul" | "ol"; liOpen: boolean }[] = [];
+  const closeLi = () => {
+    const top = stack[stack.length - 1];
+    if (top?.liOpen) {
+      parts.push("</li>");
+      top.liOpen = false;
     }
+  };
+  const closeOne = () => {
+    closeLi();
+    const top = stack.pop();
+    if (top) parts.push(`</${top.tag}>`);
+    closeLi(); // the parent li that contained this nested list
+  };
+  const closeAll = () => {
+    while (stack.length > 0) closeOne();
   };
   for (const block of model.blocks) {
     if (block.type === "table" && block.table) {
-      closeList();
+      closeAll();
       const rows = block.table
         .map((row) => `<tr>${row.map((c) => `<td>${escapeHtml(c)}</td>`).join("")}</tr>`)
         .join("\n");
@@ -83,20 +96,27 @@ export function toHTML(model: DocModel): string {
       continue;
     }
     if (block.type === "bullet" || block.type === "numbered") {
-      const want = block.type === "bullet" ? "ul" : "ol";
-      if (openList !== want) {
-        closeList();
+      const want: "ul" | "ol" = block.type === "bullet" ? "ul" : "ol";
+      // a list can nest at most one level deeper than its parent: clamp
+      // skipped levels to the current depth so the HTML stays valid
+      const level = Math.min(3, block.indent ?? 0, stack.length);
+      while (stack.length > level + 1) closeOne();
+      if (stack.length === level + 1 && stack[level]!.tag !== want) closeOne();
+      while (stack.length < level + 1) {
+        // deeper list opens inside the (still open) parent li
         parts.push(`<${want}>`);
-        openList = want;
+        stack.push({ tag: want, liOpen: false });
       }
-      parts.push(`<li>${runsHtml(block)}</li>`);
+      closeLi();
+      parts.push(`<li>${runsHtml(block)}`);
+      stack[stack.length - 1]!.liOpen = true;
       continue;
     }
-    closeList();
+    closeAll();
     const tag = HTML_TAG[block.type] ?? "p";
     parts.push(`<${tag}>${runsHtml(block)}</${tag}>`);
   }
-  closeList();
+  closeAll();
   return parts.join("\n");
 }
 
@@ -107,10 +127,10 @@ function escapeMd(text: string): string {
 export function toMarkdown(model: DocModel): { markdown: string; report: LossReport } {
   const warnings: LossWarning[] = [];
   const lines: string[] = [];
-  let counter = 0;
+  const counter = new ListCounter();
   model.blocks.forEach((block, bi) => {
     if (block.type === "table" && block.table) {
-      counter = 0;
+      counter.next("paragraph", 0);
       const esc = (c: string) => {
         if (c.includes("\n")) {
           warnings.push({
@@ -127,17 +147,18 @@ export function toMarkdown(model: DocModel): { markdown: string; report: LossRep
       lines.push(md.join("\n"));
       return;
     }
-    if (block.type === "numbered") counter += 1;
-    else counter = 0;
+    const level = Math.min(3, block.indent ?? 0);
+    counter.next(block.type, level);
+    const listPad = "    ".repeat(level);
     const prefix =
       block.type === "heading1"
         ? "# "
         : block.type === "heading2"
           ? "## "
           : block.type === "bullet"
-            ? "- "
+            ? `${listPad}- `
             : block.type === "numbered"
-              ? `${counter}. `
+              ? `${listPad}${counter.lastCount}. `
               : "";
     const text = block.runs
       .map((run) => {

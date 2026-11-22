@@ -254,8 +254,8 @@ function transformST(b: ST, a: Exclude<PrimOp, { t: "replace-model" }>): Transfo
       return ok(b);
     }
     case "set-block-type": {
-      if (a.block === b.block && a.after !== b.after) {
-        return conflict(`block ${b.block} concurrently retyped to different types`);
+      if (a.block === b.block && (a.after !== b.after || (a.afterIndent ?? 0) !== (b.afterIndent ?? 0))) {
+        return conflict(`block ${b.block} concurrently retyped to different types/levels`);
       }
       return ok(b);
     }

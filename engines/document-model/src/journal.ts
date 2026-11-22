@@ -99,6 +99,11 @@ export function validatePrimOp(op: unknown): string[] {
       if (!Number.isInteger(o.block)) errors.push("set-block-type: bad block");
       if (!BLOCK_TYPES.includes(o.before as string) || !BLOCK_TYPES.includes(o.after as string))
         errors.push("set-block-type: bad type");
+      for (const k of ["beforeIndent", "afterIndent"]) {
+        const v = o[k];
+        if (v !== undefined && (!Number.isInteger(v) || (v as number) < 0 || (v as number) > 3))
+          errors.push(`set-block-type: bad ${k}`);
+      }
       break;
     case "replace-model": {
       for (const side of ["before", "after"] as const) {

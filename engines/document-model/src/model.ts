@@ -91,6 +91,12 @@ export function validateModel(model: DocModel): string[] {
     } else if (b.table !== undefined) {
       errors.push(`block ${i}: non-table block carries table data`);
     }
+    if (b.indent !== undefined) {
+      if (b.type !== "bullet" && b.type !== "numbered")
+        errors.push(`block ${i}: indent on a non-list block`);
+      else if (!Number.isInteger(b.indent) || b.indent < 0 || b.indent > 3)
+        errors.push(`block ${i}: indent out of range`);
+    }
     b.runs.forEach((r, j) => {
       if (r.text.length === 0) errors.push(`block ${i} run ${j} is empty`);
     });

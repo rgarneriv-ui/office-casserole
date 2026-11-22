@@ -54,8 +54,9 @@ function paragraphXml(block: Block): string {
   const props: string[] = [];
   if (styleId) props.push(`<w:pStyle w:val="${styleId}"/>`);
   if (numId !== undefined) {
+    const ilvl = Math.max(0, Math.min(3, block.indent ?? 0));
     props.push(`<w:pStyle w:val="ListParagraph"/>`);
-    props.push(`<w:numPr><w:ilvl w:val="0"/><w:numId w:val="${numId}"/></w:numPr>`);
+    props.push(`<w:numPr><w:ilvl w:val="${ilvl}"/><w:numId w:val="${numId}"/></w:numPr>`);
   }
   const pPr = props.length ? `<w:pPr>${props.join("")}</w:pPr>` : "";
   const runs = block.runs.map((r) => runXml(r.text, r.marks)).join("");
@@ -66,12 +67,26 @@ const NUMBERING_XML =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
   `<w:numbering xmlns:w="${'$'}{W_NS}">`
     .replace("${W_NS}", W_NS) +
-  `<w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/>` +
-  `<w:numFmt w:val="bullet"/><w:lvlText w:val="\u2022"/><w:lvlJc w:val="left"/>` +
-  `<w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum>` +
-  `<w:abstractNum w:abstractNumId="2"><w:lvl w:ilvl="0"><w:start w:val="1"/>` +
-  `<w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/>` +
-  `<w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum>` +
+  `<w:abstractNum w:abstractNumId="1">` +
+  ["\u2022", "o", "\u25aa", "\u2023"]
+    .map(
+      (glyph, lvl) =>
+        `<w:lvl w:ilvl="${lvl}"><w:start w:val="1"/><w:numFmt w:val="bullet"/>` +
+        `<w:lvlText w:val="${glyph}"/><w:lvlJc w:val="left"/>` +
+        `<w:pPr><w:ind w:left="${720 * (lvl + 1)}" w:hanging="360"/></w:pPr></w:lvl>`
+    )
+    .join("") +
+  `</w:abstractNum>` +
+  `<w:abstractNum w:abstractNumId="2">` +
+  ["decimal", "lowerLetter", "lowerRoman", "decimal"]
+    .map(
+      (fmt, lvl) =>
+        `<w:lvl w:ilvl="${lvl}"><w:start w:val="1"/><w:numFmt w:val="${fmt}"/>` +
+        `<w:lvlText w:val="%${lvl + 1}${lvl === 3 ? ")" : "."}"/><w:lvlJc w:val="left"/>` +
+        `<w:pPr><w:ind w:left="${720 * (lvl + 1)}" w:hanging="360"/></w:pPr></w:lvl>`
+    )
+    .join("") +
+  `</w:abstractNum>` +
   `<w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>` +
   `<w:num w:numId="2"><w:abstractNumId w:val="2"/></w:num>` +
   `</w:numbering>`;
@@ -324,6 +339,7 @@ function importParagraph(
   numFmtById: Map<string, string> = new Map()
 ): Block {
   let type: BlockType = "paragraph";
+  let pendingIndent = 0;
   const pPr = firstByLocalName(p, "pPr");
   if (pPr) {
     const numPr = firstByLocalName(pPr, "numPr");
@@ -344,14 +360,15 @@ function importParagraph(
         });
       }
       const ilvlEl = firstByLocalName(numPr, "ilvl");
-      const ilvl = ilvlEl ? wAttr(ilvlEl, "val") : "0";
-      if (ilvl && ilvl !== "0") {
+      const ilvl = Number((ilvlEl ? wAttr(ilvlEl, "val") : "0") ?? 0);
+      if (ilvl > 3) {
         warnings.push({
           code: "DOCX-IMPORT-LIST-LEVEL",
-          message: `Nested list level ${ilvl} flattened to level 0 (nesting not yet supported).`,
+          message: `List level ${ilvl} clamped to level 3 (deeper nesting not supported).`,
           blockIndex,
         });
       }
+      pendingIndent = Math.max(0, Math.min(3, ilvl));
     } else if (styleId === "Heading1" || styleId === "Title") type = "heading1";
     else if (styleId === "Heading2") type = "heading2";
     else if (styleId && /^Heading[3-9]$/.test(styleId)) {
@@ -371,6 +388,7 @@ function importParagraph(
   }
 
   const block = newBlock(type);
+  if ((type === "bullet" || type === "numbered") && pendingIndent > 0) block.indent = pendingIndent;
   for (const child of Array.from(p.children)) {
     if (child.localName === "r") {
       const marks: Mark[] = [];

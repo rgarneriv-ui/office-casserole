@@ -145,24 +145,22 @@ export function splitBlock(model: DocModel, pos: Position, rec?: OpRecorder): Po
   const block = model.blocks[pos.block];
   if (!block) throw new Error(`splitBlock: no block ${pos.block}`);
   const remainder = blockText(block).length - pos.offset;
-  const newType: BlockType =
-    block.type === "bullet" || block.type === "numbered"
-      ? block.type // lists continue on Enter (empty-item exit is a UI rule)
-      : block.type !== "paragraph" && remainder > 0
-        ? block.type
-        : "paragraph";
-  emit(
-    model,
-    {
-      t: "split-block",
-      block: pos.block,
-      offset: pos.offset,
-      newBlockId: newId(),
-      newBlockType: newType,
-      origType: block.type,
-    },
-    rec
-  );
+  const isList = block.type === "bullet" || block.type === "numbered";
+  const newType: BlockType = isList
+    ? block.type // lists continue on Enter (empty-item exit is a UI rule)
+    : block.type !== "paragraph" && remainder > 0
+      ? block.type
+      : "paragraph";
+  const op: PrimOp = {
+    t: "split-block",
+    block: pos.block,
+    offset: pos.offset,
+    newBlockId: newId(),
+    newBlockType: newType,
+    origType: block.type,
+  };
+  if (isList && block.indent) op.newIndent = block.indent; // inherit nesting
+  emit(model, op, rec);
   return { block: pos.block + 1, offset: 0 };
 }
 
@@ -239,10 +237,36 @@ export function setBlockType(
   rec?: OpRecorder
 ): void {
   const { start, end } = normRange(range);
+  const typeIsList = type === "bullet" || type === "numbered";
   for (let b = start.block; b <= end.block; b++) {
     const block = model.blocks[b]!;
     if (block.type === type) continue;
-    emit(model, { t: "set-block-type", block: b, before: block.type, after: type }, rec);
+    const op: PrimOp = { t: "set-block-type", block: b, before: block.type, after: type };
+    if (block.indent) op.beforeIndent = block.indent;
+    if (typeIsList && block.indent) op.afterIndent = block.indent; // keep level across bullet<->numbered
+    emit(model, op, rec);
+  }
+}
+
+/** Tab / Shift-Tab: change list nesting by delta, clamped to 0–3. Non-list
+ *  blocks in the range are left alone. */
+export function setListIndent(
+  model: DocModel,
+  range: DocRange,
+  delta: 1 | -1,
+  rec?: OpRecorder
+): void {
+  const { start, end } = normRange(range);
+  for (let b = start.block; b <= end.block; b++) {
+    const block = model.blocks[b]!;
+    if (block.type !== "bullet" && block.type !== "numbered") continue;
+    const cur = block.indent ?? 0;
+    const next = Math.max(0, Math.min(3, cur + delta));
+    if (next === cur) continue;
+    const op: PrimOp = { t: "set-block-type", block: b, before: block.type, after: block.type };
+    if (cur) op.beforeIndent = cur;
+    if (next) op.afterIndent = next;
+    emit(model, op, rec);
   }
 }
 

@@ -19,6 +19,8 @@ export interface Block {
   id: string;
   type: BlockType;
   runs: TextRun[];
+  /** List nesting level 0–3; only meaningful on bullet/numbered blocks. */
+  indent?: number;
   /** Present exactly when type === "table": rows of plain-text cells
    *  (rectangular). Tables are atomic blocks (ADR-0011): edited through
    *  dedicated set-table operations, not the caret system. */

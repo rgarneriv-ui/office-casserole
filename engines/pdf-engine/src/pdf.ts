@@ -14,6 +14,7 @@
 import { DocModel, Mark } from "../../document-model/src/types";
 import { LossReport, LossWarning } from "../../document-model/src/serialize";
 import { FIRST_CHAR, FONT_WIDTHS } from "./helvetica-metrics";
+import { BULLET_WINANSI, ListCounter } from "../../document-model/src/listmarks";
 
 const PAGE_W = 612; // US Letter, points
 const PAGE_H = 792;
@@ -225,8 +226,8 @@ export function exportPdf(
   let page: Placed[] = [];
   let y = PAGE_H - MARGIN;
 
-  const LIST_INDENT = 22; // points
-  let listCounter = 0;
+  const LIST_INDENT = 22; // points per level
+  const listCounter = new ListCounter();
   model.blocks.forEach((block, bi) => {
     if (block.type === "table" && block.table) {
       const pad = 4;
@@ -281,8 +282,8 @@ export function exportPdf(
       return;
     }
     const isList = block.type === "bullet" || block.type === "numbered";
-    if (block.type === "numbered") listCounter += 1;
-    else listCounter = 0;
+    const level = isList ? Math.min(3, block.indent ?? 0) : 0;
+    const marker = listCounter.next(block.type, level);
     const size =
       block.type === "heading1" ? H1_SIZE : block.type === "heading2" ? H2_SIZE : BODY_SIZE;
     const forceBold = block.type === "heading1" || block.type === "heading2";
@@ -294,12 +295,13 @@ export function exportPdf(
             underline: r.marks.includes("underline"),
           }))
         : [{ text: "", font: forceBold ? "B" : "R", underline: false }];
-    const indent = isList ? LIST_INDENT : 0;
+    const indent = isList ? LIST_INDENT * (level + 1) : 0;
     const lines = wrapBlock(spans, size, maxWidth - indent, family);
     const lineH = size * LINE_FACTOR;
     const spaceBefore = isList || block.type === "paragraph" ? 0 : size * 0.6;
-    // 0x95 is the bullet glyph in WinAnsi (our declared encoding)
-    const prefix = block.type === "bullet" ? "\x95" : block.type === "numbered" ? `${listCounter}.` : null;
+    // WinAnsi-safe per-level glyphs (base-14 fonts, no subsetting)
+    const prefix =
+      block.type === "bullet" ? BULLET_WINANSI[level]! : block.type === "numbered" ? marker : null;
 
     y -= spaceBefore;
     lines.forEach((line, li) => {
@@ -327,8 +329,9 @@ export function exportPdf(
       }
       const { line, y: ly, prefix } = item;
       if (prefix) {
+        const px = Math.max(MARGIN, item.x - 18);
         ops.push(
-          `BT /FR ${line.size} Tf ${MARGIN.toFixed(2)} ${ly.toFixed(2)} Td (${pdfEscape(prefix)}) Tj ET`
+          `BT /FR ${line.size} Tf ${px.toFixed(2)} ${ly.toFixed(2)} Td (${pdfEscape(prefix)}) Tj ET`
         );
       }
       let x = item.x;

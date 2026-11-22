@@ -8,3 +8,4 @@ export * from "./diff";
 export * from "./oplog";
 export * from "./journal";
 export * from "./transform";
+export * from "./listmarks";
