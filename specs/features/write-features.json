@@ -309,5 +309,59 @@
       "Fixture corpus is self-generated + synthetic; no real-Word differential corpus yet (§22.2), so status stays below verified",
       "No Original Format Preservation store yet: import is one-way into the native model"
     ]
+  },
+  {
+    "id": "WRITE-CONV-002",
+    "application": "casserole-write",
+    "name": "PDF export with deterministic pagination",
+    "priority": "P1",
+    "description": "Export the document as a paginated PDF (Courier metrics, exact line breaking); charset losses replaced and reported; fixed-pitch rendering disclosed per export.",
+    "baseline": {
+      "product": "Microsoft Word",
+      "capability": "Save as PDF",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
+    "owner": "engines/pdf-engine",
+    "dependencies": [
+      "WRITE-EDIT-001"
+    ],
+    "commands": [
+      "export.pdf"
+    ],
+    "offlineSupport": "fully offline",
+    "edgeCases": [
+      "multi-page pagination",
+      "over-long word hard-break",
+      "non-Latin replacement",
+      "parenthesis escaping"
+    ],
+    "acceptance": [
+      "xref entries resolve to their objects",
+      "identical input yields identical bytes",
+      "independent parser (pypdf) extracts the text across pages"
+    ],
+    "verification": {
+      "required": [
+        "unit",
+        "compatibility"
+      ]
+    },
+    "status": "tested",
+    "evidence": [
+      {
+        "kind": "test-run",
+        "ref": "engines/pdf-engine/test/pdf.test.ts: 5 tests pass",
+        "date": "2026-11-22"
+      },
+      {
+        "kind": "report",
+        "ref": "pypdf cross-validation: 4-page sample parsed, text extracted",
+        "date": "2026-11-22"
+      }
+    ],
+    "knownLimitations": [
+      "Courier only (ADR-0006); no PDF reading, forms, signatures, or PDF/A yet"
+    ]
   }
 ]

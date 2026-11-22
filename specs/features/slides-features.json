@@ -1,0 +1,104 @@
+[
+  {
+    "id": "SLIDES-MODEL-001",
+    "application": "casserole-slides",
+    "name": "Typed presentation model with operations",
+    "priority": "P0",
+    "description": "Slides of typed text/rect elements on a 1600x900 logical canvas; slide and element operations with geometry clamping; validation; JSON round-trip.",
+    "baseline": {
+      "product": "Microsoft PowerPoint",
+      "capability": "Slide/shape object model core",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
+    "owner": "engines/presentation-model",
+    "dependencies": [],
+    "commands": [
+      "slide.add",
+      "slide.duplicate",
+      "slide.move",
+      "slide.remove",
+      "element.add",
+      "element.update",
+      "element.remove"
+    ],
+    "offlineSupport": "fully offline",
+    "edgeCases": [
+      "last slide resets instead of emptying deck",
+      "update cannot change id/kind or leave canvas",
+      "duplicate gets fresh ids"
+    ],
+    "acceptance": [
+      "All operations keep validateDeck empty",
+      "JSON round-trip is deep-equal",
+      "invalid decks are rejected"
+    ],
+    "verification": {
+      "required": [
+        "unit"
+      ]
+    },
+    "status": "tested",
+    "evidence": [
+      {
+        "kind": "test-run",
+        "ref": "engines/presentation-model/test/deck.test.ts: 5 tests pass",
+        "date": "2026-11-22"
+      }
+    ],
+    "knownLimitations": [
+      "No masters/layouts/themes, media, or animations yet; PPTX conversion pending (ADR-0007)"
+    ]
+  },
+  {
+    "id": "SLIDES-EDIT-001",
+    "application": "casserole-slides",
+    "name": "Slides editor slice",
+    "priority": "P1",
+    "description": "Thumbnail rail, canvas editing (drag move, corner resize, double-click text edit, properties bar), undo/redo, autosave, present mode with keyboard navigation, JSON export.",
+    "baseline": {
+      "product": "Microsoft PowerPoint",
+      "capability": "Basic authoring + slideshow",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
+    "owner": "apps/slides",
+    "dependencies": [
+      "SLIDES-MODEL-001"
+    ],
+    "commands": [
+      "present.start",
+      "present.next",
+      "present.prev",
+      "export.json"
+    ],
+    "offlineSupport": "fully offline",
+    "edgeCases": [
+      "drag checkpoints once per gesture",
+      "delete last slide resets",
+      "resize clamped to canvas"
+    ],
+    "acceptance": [
+      "Boot renders seed deck and thumbnails",
+      "Toolbar add + undo round-trips slide count",
+      "Autosave persists; present stage renders elements"
+    ],
+    "verification": {
+      "required": [
+        "unit",
+        "end-to-end"
+      ]
+    },
+    "status": "tested",
+    "evidence": [
+      {
+        "kind": "test-run",
+        "ref": "scripts/smoke-slides.mjs: pass (boot, add/undo, autosave, present)",
+        "date": "2026-11-22"
+      }
+    ],
+    "knownLimitations": [
+      "Text editing via prompt dialog in v0 (inline rich editing is a later work order)"
+    ]
+  }
+]
