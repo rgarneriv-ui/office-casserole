@@ -439,7 +439,28 @@ document.getElementById("btn-undo")?.addEventListener("click", () => dispatch("u
 document.getElementById("btn-redo")?.addEventListener("click", () => dispatch("redo"));
 
 // ---------- export ----------
-function download(name: string, mime: string, content: string): void {
+// In the artifact sandbox, anchor downloads are blocked; the host mediates
+// saves through the `downloads` capability. Fall back to an anchor when the
+// page runs as a plain local file.
+declare global {
+  interface Window {
+    claude?: { use: (name: string) => Promise<{ save: (o: { filename: string; data: Blob | string }) => Promise<unknown> } | null> };
+  }
+}
+let hostDownloads: { save: (o: { filename: string; data: Blob | string }) => Promise<unknown> } | null = null;
+if (window.claude?.use) {
+  window.claude.use("downloads").then((d) => { hostDownloads = d; }).catch(() => {});
+}
+
+async function download(name: string, mime: string, content: string): Promise<void> {
+  if (hostDownloads) {
+    try {
+      await hostDownloads.save({ filename: name, data: new Blob([content], { type: mime }) });
+      return;
+    } catch {
+      /* viewer declined or save failed; fall through to anchor attempt */
+    }
+  }
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([content], { type: mime }));
   a.download = name;
