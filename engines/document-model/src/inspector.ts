@@ -5,7 +5,7 @@
  * model, never a second source of truth (§6.2 closing requirement).
  */
 
-import { DocModel, Mark } from "./types";
+import { BlockType, DocModel, Mark } from "./types";
 import { blockText, marksEqual, sortMarks } from "./model";
 import { setBlockType, toggleMark } from "./operations";
 import { OpRecorder } from "./oplog";
@@ -26,6 +26,8 @@ const BLOCK_LABEL: Record<string, string> = {
   paragraph: "Para",
   heading1: "Heading 1",
   heading2: "Heading 2",
+  bullet: "Bullet",
+  numbered: "Numbered",
 };
 
 const MARK_LABEL: Record<Mark, string> = {
@@ -114,7 +116,7 @@ export function inspect(model: DocModel): FormatCode[] {
  */
 export type CodeAction =
   | { kind: "remove-mark" }
-  | { kind: "set-block-type"; blockType: "paragraph" | "heading1" | "heading2" };
+  | { kind: "set-block-type"; blockType: BlockType };
 
 export function codeActionsFor(code: FormatCode): string[] {
   if (code.kind === "mark-on" || code.kind === "mark-off") return ["remove-mark"];

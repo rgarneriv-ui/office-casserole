@@ -209,15 +209,22 @@ export function exportPdf(
   interface Placed {
     line: Line;
     y: number;
+    indent?: number;
+    prefix?: string | null;
   }
   const pages: Placed[][] = [];
   let page: Placed[] = [];
   let y = PAGE_H - MARGIN;
 
+  const LIST_INDENT = 22; // points
+  let listCounter = 0;
   model.blocks.forEach((block, bi) => {
+    const isList = block.type === "bullet" || block.type === "numbered";
+    if (block.type === "numbered") listCounter += 1;
+    else listCounter = 0;
     const size =
       block.type === "heading1" ? H1_SIZE : block.type === "heading2" ? H2_SIZE : BODY_SIZE;
-    const forceBold = block.type !== "paragraph";
+    const forceBold = block.type === "heading1" || block.type === "heading2";
     const spans: Span[] =
       block.runs.length > 0
         ? block.runs.map((r) => ({
@@ -226,20 +233,23 @@ export function exportPdf(
             underline: r.marks.includes("underline"),
           }))
         : [{ text: "", font: forceBold ? "B" : "R", underline: false }];
-    const lines = wrapBlock(spans, size, maxWidth, family);
+    const indent = isList ? LIST_INDENT : 0;
+    const lines = wrapBlock(spans, size, maxWidth - indent, family);
     const lineH = size * LINE_FACTOR;
-    const spaceBefore = block.type === "paragraph" ? 0 : size * 0.6;
+    const spaceBefore = isList || block.type === "paragraph" ? 0 : size * 0.6;
+    // 0x95 is the bullet glyph in WinAnsi (our declared encoding)
+    const prefix = block.type === "bullet" ? "\x95" : block.type === "numbered" ? `${listCounter}.` : null;
 
     y -= spaceBefore;
-    for (const line of lines) {
+    lines.forEach((line, li) => {
       if (y - lineH < MARGIN) {
         pages.push(page);
         page = [];
         y = PAGE_H - MARGIN;
       }
       y -= lineH;
-      page.push({ line, y });
-    }
+      page.push({ line, y, indent, prefix: li === 0 ? prefix : null });
+    });
     y -= BODY_SIZE * 0.5; // paragraph spacing
   });
   pages.push(page);
@@ -247,8 +257,13 @@ export function exportPdf(
   // content streams
   const contentStreams = pages.map((placed) => {
     const ops: string[] = [];
-    for (const { line, y: ly } of placed) {
-      let x = MARGIN;
+    for (const { line, y: ly, indent = 0, prefix } of placed) {
+      if (prefix) {
+        ops.push(
+          `BT /FR ${line.size} Tf ${MARGIN.toFixed(2)} ${ly.toFixed(2)} Td (${pdfEscape(prefix)}) Tj ET`
+        );
+      }
+      let x = MARGIN + indent;
       for (const span of line.spans) {
         if (span.text.length === 0) continue;
         const w = measureText(span.text, span.font, line.size, family);

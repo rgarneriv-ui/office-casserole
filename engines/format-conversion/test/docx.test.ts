@@ -64,6 +64,7 @@ test("docx: export is a valid OOXML package shape", async () => {
     "_rels/.rels",
     "word/_rels/document.xml.rels",
     "word/document.xml",
+    "word/numbering.xml",
     "word/styles.xml",
   ]);
   const doc = new TextDecoder().decode(entries.find((e) => e.name === "word/document.xml")!.data);
@@ -120,4 +121,52 @@ test("docx: non-docx input fails loudly", async () => {
   await assert.rejects(() => importDocx(new TextEncoder().encode("not a zip at all"), parseXml));
   const bytes = await zipWrite([{ name: "readme.txt", data: new TextEncoder().encode("x") }]);
   await assert.rejects(() => importDocx(bytes, parseXml), /document\.xml missing/);
+});
+
+test("docx: lists round-trip through real OOXML numbering", async () => {
+  const d: DocModel = {
+    schemaVersion: SCHEMA_VERSION,
+    blocks: [
+      newBlock("bullet", [{ text: "alpha", marks: [] }]),
+      newBlock("bullet", [{ text: "beta", marks: [] }]),
+      newBlock("numbered", [{ text: "one", marks: [] }]),
+      newBlock("numbered", [{ text: "two", marks: ["italic"] }]),
+      newBlock("paragraph", [{ text: "plain", marks: [] }]),
+    ],
+  };
+  const { bytes, report } = await exportDocx(d);
+  assert.equal(report.lossless, true);
+  const entries = await zipRead(bytes);
+  const numbering = new TextDecoder().decode(entries.find((e) => e.name === "word/numbering.xml")!.data);
+  assert.ok(numbering.includes('<w:numFmt w:val="bullet"/>'));
+  assert.ok(numbering.includes('<w:numFmt w:val="decimal"/>'));
+  const docXml = new TextDecoder().decode(entries.find((e) => e.name === "word/document.xml")!.data);
+  assert.ok(docXml.includes('<w:numId w:val="1"/>'), "bullet numId");
+  assert.ok(docXml.includes('<w:numId w:val="2"/>'), "decimal numId");
+
+  const { model, report: imp } = await importDocx(bytes, parseXml);
+  assert.equal(imp.lossless, true, JSON.stringify(imp.warnings));
+  assert.deepEqual(
+    model.blocks.map((b) => b.type),
+    ["bullet", "bullet", "numbered", "numbered", "paragraph"]
+  );
+  assert.deepEqual(model.blocks[3]!.runs[0]!.marks, ["italic"]);
+});
+
+test("docx: numPr without resolvable numbering imports as numbered with a warning", async () => {
+  const docXml =
+    `<?xml version="1.0"?>` +
+    `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>` +
+    `<w:p><w:pPr><w:numPr><w:ilvl w:val="1"/><w:numId w:val="77"/></w:numPr></w:pPr>` +
+    `<w:r><w:t>mystery item</w:t></w:r></w:p>` +
+    `<w:sectPr/></w:body></w:document>`;
+  const bytes = await zipWrite([
+    { name: "[Content_Types].xml", data: new TextEncoder().encode("<Types/>") },
+    { name: "word/document.xml", data: new TextEncoder().encode(docXml) },
+  ]);
+  const { model, report } = await importDocx(bytes, parseXml);
+  assert.equal(model.blocks[0]!.type, "numbered");
+  const codes = report.warnings.map((w) => w.code);
+  assert.ok(codes.includes("DOCX-IMPORT-NUMBERING"));
+  assert.ok(codes.includes("DOCX-IMPORT-LIST-LEVEL"));
 });

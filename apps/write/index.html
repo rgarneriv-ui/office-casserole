@@ -36,6 +36,12 @@
   #editor h1 { font-size: 30px; margin: 0 0 12px; line-height: 1.2; }
   #editor h2 { font-size: 22px; margin: 18px 0 8px; }
   #editor p { margin: 0 0 10px; }
+  #editor { counter-reset: casnum; }
+  #editor p.li-bullet, #editor p.li-numbered { margin: 0 0 4px 34px; position: relative; }
+  #editor p.li-bullet::before { content: "\2022"; position: absolute; left: -20px; }
+  #editor p:not(.li-numbered) { counter-reset: casnum; }
+  #editor p.li-numbered { counter-increment: casnum; }
+  #editor p.li-numbered::before { content: counter(casnum) "."; position: absolute; left: -26px; }
   .m-bold { font-weight: 700; } .m-italic { font-style: italic; } .m-underline { text-decoration: underline; }
   aside { flex: 1; max-width: 420px; display: flex; flex-direction: column;
           border-left: 1px solid var(--line); background: var(--code-bg); min-width: 280px; }
@@ -110,6 +116,8 @@
         <option value="paragraph">Paragraph</option>
         <option value="heading1">Heading 1</option>
         <option value="heading2">Heading 2</option>
+        <option value="bullet">• Bulleted list</option>
+        <option value="numbered">1. Numbered list</option>
       </select>
       <button id="btn-bold" title="Bold (Ctrl/Cmd-B)">B</button>
       <button id="btn-italic" title="Italic (Ctrl/Cmd-I)">I</button>

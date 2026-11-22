@@ -6,7 +6,7 @@
 
 export type Mark = "bold" | "italic" | "underline";
 
-export type BlockType = "paragraph" | "heading1" | "heading2";
+export type BlockType = "paragraph" | "heading1" | "heading2" | "bullet" | "numbered";
 
 /** A contiguous span of text with a uniform mark set. */
 export interface TextRun {

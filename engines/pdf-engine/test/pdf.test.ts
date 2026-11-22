@@ -120,3 +120,25 @@ test("pdf: no rendered line exceeds the measure (measured wrapping)", () => {
   }
   assert.equal(totalW, 300, "no characters lost in hard-break");
 });
+
+test("pdf: list items render prefixes with hanging indent; numbering restarts", () => {
+  const model: DocModel = {
+    schemaVersion: SCHEMA_VERSION,
+    blocks: [
+      newBlock("bullet", [{ text: "bullet item", marks: [] }]),
+      newBlock("numbered", [{ text: "first", marks: [] }]),
+      newBlock("numbered", [{ text: "second", marks: [] }]),
+      newBlock("paragraph", [{ text: "break", marks: [] }]),
+      newBlock("numbered", [{ text: "restart", marks: [] }]),
+    ],
+  };
+  const { bytes } = exportPdf(model);
+  const text = dec.decode(bytes);
+  assert.ok(text.includes("(•)"), "bullet glyph drawn");
+  assert.ok(text.includes("(1.)"), "first number");
+  assert.ok(text.includes("(2.)"), "second number");
+  assert.equal((text.match(/\(1\.\)/g) ?? []).length, 2, "numbering restarts after the paragraph");
+  // prefix at the margin, content indented
+  const content = /BT \/FR \d+ Tf (\d+\.\d+) [\d.]+ Td \(bullet item\)/.exec(text);
+  assert.ok(content && Number(content[1]) > 72, "list content is indented past the margin");
+});

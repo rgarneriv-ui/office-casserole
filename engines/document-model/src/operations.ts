@@ -146,7 +146,11 @@ export function splitBlock(model: DocModel, pos: Position, rec?: OpRecorder): Po
   if (!block) throw new Error(`splitBlock: no block ${pos.block}`);
   const remainder = blockText(block).length - pos.offset;
   const newType: BlockType =
-    block.type !== "paragraph" && remainder > 0 ? block.type : "paragraph";
+    block.type === "bullet" || block.type === "numbered"
+      ? block.type // lists continue on Enter (empty-item exit is a UI rule)
+      : block.type !== "paragraph" && remainder > 0
+        ? block.type
+        : "paragraph";
   emit(
     model,
     {

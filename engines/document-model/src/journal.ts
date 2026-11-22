@@ -55,7 +55,7 @@ function isRuns(v: unknown): v is TextRun[] {
   );
 }
 
-const BLOCK_TYPES = ["paragraph", "heading1", "heading2"];
+const BLOCK_TYPES = ["paragraph", "heading1", "heading2", "bullet", "numbered"];
 
 export function validatePrimOp(op: unknown): string[] {
   const errors: string[] = [];

@@ -15,6 +15,8 @@ import { ZipEntry, zipRead, zipWrite } from "./zip";
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 
+const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+
 // ---------- export ----------
 
 function xmlEscape(text: string): string {
@@ -29,7 +31,12 @@ const STYLE_ID: Record<BlockType, string | null> = {
   paragraph: null,
   heading1: "Heading1",
   heading2: "Heading2",
+  bullet: null,
+  numbered: null,
 };
+
+/** numId 1 = bullet list, numId 2 = decimal list (see NUMBERING_XML). */
+const NUM_ID: Partial<Record<BlockType, number>> = { bullet: 1, numbered: 2 };
 
 function runXml(text: string, marks: Mark[]): string {
   const props: string[] = [];
@@ -42,12 +49,32 @@ function runXml(text: string, marks: Mark[]): string {
 
 function paragraphXml(block: Block): string {
   const styleId = STYLE_ID[block.type];
-  const pPr = styleId ? `<w:pPr><w:pStyle w:val="${styleId}"/></w:pPr>` : "";
+  const numId = NUM_ID[block.type];
+  const props: string[] = [];
+  if (styleId) props.push(`<w:pStyle w:val="${styleId}"/>`);
+  if (numId !== undefined) {
+    props.push(`<w:pStyle w:val="ListParagraph"/>`);
+    props.push(`<w:numPr><w:ilvl w:val="0"/><w:numId w:val="${numId}"/></w:numPr>`);
+  }
+  const pPr = props.length ? `<w:pPr>${props.join("")}</w:pPr>` : "";
   const runs = block.runs.map((r) => runXml(r.text, r.marks)).join("");
   return `<w:p>${pPr}${runs}</w:p>`;
 }
 
-const W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
+const NUMBERING_XML =
+  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
+  `<w:numbering xmlns:w="${'$'}{W_NS}">`
+    .replace("${W_NS}", W_NS) +
+  `<w:abstractNum w:abstractNumId="1"><w:lvl w:ilvl="0"><w:start w:val="1"/>` +
+  `<w:numFmt w:val="bullet"/><w:lvlText w:val="\u2022"/><w:lvlJc w:val="left"/>` +
+  `<w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum>` +
+  `<w:abstractNum w:abstractNumId="2"><w:lvl w:ilvl="0"><w:start w:val="1"/>` +
+  `<w:numFmt w:val="decimal"/><w:lvlText w:val="%1."/><w:lvlJc w:val="left"/>` +
+  `<w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr></w:lvl></w:abstractNum>` +
+  `<w:num w:numId="1"><w:abstractNumId w:val="1"/></w:num>` +
+  `<w:num w:numId="2"><w:abstractNumId w:val="2"/></w:num>` +
+  `</w:numbering>`;
+
 
 function documentXml(model: DocModel): string {
   return (
@@ -70,6 +97,8 @@ function stylesXml(): string {
     `<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>` +
     heading("Heading1", "heading 1", 48) +
     heading("Heading2", "heading 2", 36) +
+    `<w:style w:type="paragraph" w:styleId="ListParagraph"><w:name w:val="List Paragraph"/>` +
+    `<w:basedOn w:val="Normal"/><w:qFormat/><w:pPr><w:ind w:left="720"/></w:pPr></w:style>` +
     `</w:styles>`
   );
 }
@@ -81,6 +110,7 @@ const CONTENT_TYPES =
   `<Default Extension="xml" ContentType="application/xml"/>` +
   `<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>` +
   `<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>` +
+  `<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>` +
   `</Types>`;
 
 const ROOT_RELS =
@@ -93,6 +123,7 @@ const DOC_RELS =
   `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
   `<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
   `<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>` +
+  `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>` +
   `</Relationships>`;
 
 export async function exportDocx(
@@ -104,6 +135,7 @@ export async function exportDocx(
     { name: "word/document.xml", data: textEncoder.encode(documentXml(model)) },
     { name: "word/_rels/document.xml.rels", data: textEncoder.encode(DOC_RELS) },
     { name: "word/styles.xml", data: textEncoder.encode(stylesXml()) },
+    { name: "word/numbering.xml", data: textEncoder.encode(NUMBERING_XML) },
   ];
   const bytes = await zipWrite(entries);
   // The v0 model subset is fully representable in WordprocessingML.
@@ -132,6 +164,11 @@ function childrenByLocalName(el: Element, name: string): Element[] {
 
 function firstByLocalName(el: Element, name: string): Element | null {
   return childrenByLocalName(el, name)[0] ?? null;
+}
+
+function descendantsOf(dom: Document, name: string): Element[] {
+  const root = dom.documentElement;
+  return root ? descendantsByLocalName(root, name) : [];
 }
 
 function descendantsByLocalName(el: Element, name: string): Element[] {
@@ -167,6 +204,30 @@ export async function importDocx(
   const body = dom.getElementsByTagNameNS?.(W_NS, "body")[0] ?? dom.getElementsByTagName("w:body")[0];
   if (!body) throw new Error("Invalid DOCX: no document body");
 
+  // numbering lookup: numId -> numFmt of level 0 (bullet | decimal | ...)
+  const numFmtById = new Map<string, string>();
+  const numberingEntry = entries.find((e) => e.name === "word/numbering.xml");
+  if (numberingEntry) {
+    try {
+      const numDom = parseXml(textDecoder.decode(numberingEntry.data));
+      const abstractFmt = new Map<string, string>();
+      for (const abs of descendantsOf(numDom, "abstractNum")) {
+        const id = wAttr(abs, "abstractNumId");
+        const lvl0 = descendantsByLocalName(abs, "lvl").find((l) => wAttr(l, "ilvl") === "0");
+        const fmt = lvl0 ? descendantsByLocalName(lvl0, "numFmt")[0] : undefined;
+        if (id && fmt) abstractFmt.set(id, wAttr(fmt, "val") ?? "");
+      }
+      for (const num of descendantsOf(numDom, "num")) {
+        const numId = wAttr(num, "numId");
+        const absRef = descendantsByLocalName(num, "abstractNumId")[0];
+        const absId = absRef ? wAttr(absRef, "val") : null;
+        if (numId && absId && abstractFmt.has(absId)) numFmtById.set(numId, abstractFmt.get(absId)!);
+      }
+    } catch {
+      /* unreadable numbering part: fall through to the warning path */
+    }
+  }
+
   const model: DocModel = { schemaVersion: SCHEMA_VERSION, blocks: [] };
 
   for (let i = 0; i < body.children.length; i++) {
@@ -181,7 +242,7 @@ export async function importDocx(
       });
       // flatten table cell paragraphs so content is not silently dropped
       for (const p of descendantsByLocalName(el, "p")) {
-        model.blocks.push(importParagraph(p, model.blocks.length, warnings));
+        model.blocks.push(importParagraph(p, model.blocks.length, warnings, numFmtById));
       }
       continue;
     }
@@ -193,7 +254,7 @@ export async function importDocx(
       });
       continue;
     }
-    model.blocks.push(importParagraph(el, bi, warnings));
+    model.blocks.push(importParagraph(el, bi, warnings, numFmtById));
   }
 
   normalizeModel(model);
@@ -208,14 +269,39 @@ export async function importDocx(
 function importParagraph(
   p: Element,
   blockIndex: number,
-  warnings: LossWarning[]
+  warnings: LossWarning[],
+  numFmtById: Map<string, string> = new Map()
 ): Block {
   let type: BlockType = "paragraph";
   const pPr = firstByLocalName(p, "pPr");
   if (pPr) {
+    const numPr = firstByLocalName(pPr, "numPr");
     const style = firstByLocalName(pPr, "pStyle");
     const styleId = style ? wAttr(style, "val") : null;
-    if (styleId === "Heading1" || styleId === "Title") type = "heading1";
+    if (numPr) {
+      const numIdEl = firstByLocalName(numPr, "numId");
+      const numId = numIdEl ? wAttr(numIdEl, "val") : null;
+      const fmt = numId ? numFmtById.get(numId) : undefined;
+      if (fmt === "bullet") type = "bullet";
+      else if (fmt !== undefined) type = "numbered";
+      else {
+        type = "numbered";
+        warnings.push({
+          code: "DOCX-IMPORT-NUMBERING",
+          message: "Numbered paragraph whose numbering definition could not be resolved; imported as a numbered item.",
+          blockIndex,
+        });
+      }
+      const ilvlEl = firstByLocalName(numPr, "ilvl");
+      const ilvl = ilvlEl ? wAttr(ilvlEl, "val") : "0";
+      if (ilvl && ilvl !== "0") {
+        warnings.push({
+          code: "DOCX-IMPORT-LIST-LEVEL",
+          message: `Nested list level ${ilvl} flattened to level 0 (nesting not yet supported).`,
+          blockIndex,
+        });
+      }
+    } else if (styleId === "Heading1" || styleId === "Title") type = "heading1";
     else if (styleId === "Heading2") type = "heading2";
     else if (styleId && /^Heading[3-9]$/.test(styleId)) {
       type = "heading2";
@@ -224,7 +310,7 @@ function importParagraph(
         message: `${styleId} mapped to Heading 2 (deeper heading levels not yet supported).`,
         blockIndex,
       });
-    } else if (styleId && styleId !== "Normal") {
+    } else if (styleId && styleId !== "Normal" && styleId !== "ListParagraph") {
       warnings.push({
         code: "DOCX-IMPORT-STYLE",
         message: `Paragraph style "${styleId}" mapped to plain paragraph.`,

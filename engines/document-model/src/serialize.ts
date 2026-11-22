@@ -50,11 +50,9 @@ const HTML_TAG: Record<string, string> = {
   heading2: "h2",
 };
 
-export function toHTML(model: DocModel): string {
-  const parts: string[] = [];
-  for (const block of model.blocks) {
-    const tag = HTML_TAG[block.type] ?? "p";
-    const inner = block.runs
+function runsHtml(block: { runs: { text: string; marks: string[] }[] }): string {
+  return (
+    block.runs
       .map((run) => {
         let html = escapeHtml(run.text);
         if (run.marks.includes("bold")) html = `<strong>${html}</strong>`;
@@ -62,9 +60,35 @@ export function toHTML(model: DocModel): string {
         if (run.marks.includes("underline")) html = `<u>${html}</u>`;
         return html;
       })
-      .join("");
-    parts.push(`<${tag}>${inner || "<br>"}</${tag}>`);
+      .join("") || "<br>"
+  );
+}
+
+export function toHTML(model: DocModel): string {
+  const parts: string[] = [];
+  let openList: "ul" | "ol" | null = null;
+  const closeList = () => {
+    if (openList) {
+      parts.push(`</${openList}>`);
+      openList = null;
+    }
+  };
+  for (const block of model.blocks) {
+    if (block.type === "bullet" || block.type === "numbered") {
+      const want = block.type === "bullet" ? "ul" : "ol";
+      if (openList !== want) {
+        closeList();
+        parts.push(`<${want}>`);
+        openList = want;
+      }
+      parts.push(`<li>${runsHtml(block)}</li>`);
+      continue;
+    }
+    closeList();
+    const tag = HTML_TAG[block.type] ?? "p";
+    parts.push(`<${tag}>${runsHtml(block)}</${tag}>`);
   }
+  closeList();
   return parts.join("\n");
 }
 
@@ -75,9 +99,20 @@ function escapeMd(text: string): string {
 export function toMarkdown(model: DocModel): { markdown: string; report: LossReport } {
   const warnings: LossWarning[] = [];
   const lines: string[] = [];
+  let counter = 0;
   model.blocks.forEach((block, bi) => {
+    if (block.type === "numbered") counter += 1;
+    else counter = 0;
     const prefix =
-      block.type === "heading1" ? "# " : block.type === "heading2" ? "## " : "";
+      block.type === "heading1"
+        ? "# "
+        : block.type === "heading2"
+          ? "## "
+          : block.type === "bullet"
+            ? "- "
+            : block.type === "numbered"
+              ? `${counter}. `
+              : "";
     const text = block.runs
       .map((run) => {
         let md = escapeMd(run.text);

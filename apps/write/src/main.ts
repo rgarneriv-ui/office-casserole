@@ -225,6 +225,8 @@ function writeSelection(): void {
 // ---------- rendering ----------
 function renderBlock(block: Block, index: number): string {
   const tag = BLOCK_TAG[block.type] ?? "p";
+  const listCls =
+    block.type === "bullet" ? ' class="li-bullet"' : block.type === "numbered" ? ' class="li-numbered"' : "";
   const inner =
     block.runs
       .map((run) => {
@@ -236,7 +238,7 @@ function renderBlock(block: Block, index: number): string {
         return cls ? `<span class="${cls}">${text}</span>` : `<span>${text}</span>`;
       })
       .join("") || "<br>";
-  return `<${tag} data-block="${index}">${inner}</${tag}>`;
+  return `<${tag}${listCls} data-block="${index}">${inner}</${tag}>`;
 }
 
 function render(): void {
@@ -252,10 +254,12 @@ function render(): void {
   }
 }
 
-const BLOCK_CYCLE: Record<string, "paragraph" | "heading1" | "heading2"> = {
+const BLOCK_CYCLE: Record<string, Block["type"]> = {
   paragraph: "heading1",
   heading1: "heading2",
-  heading2: "paragraph",
+  heading2: "bullet",
+  bullet: "numbered",
+  numbered: "paragraph",
 };
 
 function renderCodes(): void {
@@ -414,6 +418,16 @@ function dispatch(id: CommandId, payload?: unknown): void {
       if (!isCollapsed(selection)) {
         const caret = deleteRange(model, selection, log);
         selection = { anchor: caret, focus: caret };
+      }
+      const cur = model.blocks[selection.focus.block];
+      if (
+        cur &&
+        (cur.type === "bullet" || cur.type === "numbered") &&
+        blockText(cur).length === 0
+      ) {
+        // Enter on an empty list item exits the list
+        setBlockType(model, selection, "paragraph", log);
+        break;
       }
       const caret = splitBlock(model, selection.focus, log);
       selection = { anchor: caret, focus: caret };
@@ -966,6 +980,8 @@ const COMMANDS: CommandDefinition[] = [
   blockCmd("paragraph", "Paragraph"),
   blockCmd("heading1", "Heading 1"),
   blockCmd("heading2", "Heading 2"),
+  blockCmd("bullet", "Bulleted list"),
+  blockCmd("numbered", "Numbered list"),
   {
     id: "edit.undo", name: "Undo", description: "Undo the last transaction",
     isPermitted: () => true, isAvailable: () => log.canUndo(), undoable: false,
