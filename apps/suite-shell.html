@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Office Casserole — suite demo</title>
+<style>
+  :root { --ink: #2b2620; --line: #e0dacd; --bg: #f4f1ea;
+          --write: #b4552d; --sheets: #3c6e47; --slides: #6b4b9e; }
+  * { box-sizing: border-box; }
+  body { margin: 0; height: 100vh; display: flex; flex-direction: column;
+         font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif; background: var(--bg); color: var(--ink); }
+  header { display: flex; align-items: center; gap: 14px; padding: 8px 16px;
+           background: #fff; border-bottom: 1px solid var(--line); }
+  .brand { font-weight: 800; letter-spacing: .02em; font-size: 15px; }
+  .brand span { opacity: .55; font-weight: 600; }
+  nav { display: flex; gap: 6px; }
+  nav button { font: inherit; font-size: 13.5px; padding: 6px 16px; border: 1px solid var(--line);
+               background: #faf8f3; border-radius: 8px; cursor: pointer; color: var(--ink);
+               display: flex; gap: 7px; align-items: center; }
+  nav button .dot { width: 9px; height: 9px; border-radius: 50%; }
+  nav button[data-app="write"] .dot { background: var(--write); }
+  nav button[data-app="sheets"] .dot { background: var(--sheets); }
+  nav button[data-app="slides"] .dot { background: var(--slides); }
+  nav button.active { color: #fff; border-color: transparent; }
+  nav button.active[data-app="write"] { background: var(--write); }
+  nav button.active[data-app="sheets"] { background: var(--sheets); }
+  nav button.active[data-app="slides"] { background: var(--slides); }
+  nav button.active .dot { background: #fff; }
+  .note { margin-left: auto; font-size: 11.5px; color: #8a8378; max-width: 420px; text-align: right; line-height: 1.35; }
+  main { flex: 1; min-height: 0; position: relative; }
+  iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: #fff; }
+  iframe[hidden] { display: none; }
+  .intro { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
+  .intro-card { max-width: 560px; background: #fff; border: 1px solid var(--line); border-radius: 14px;
+                padding: 28px 34px; box-shadow: 0 4px 24px rgba(43,38,32,.10); line-height: 1.55; font-size: 14.5px; }
+  .intro-card h1 { font-size: 20px; margin: 0 0 10px; }
+  .intro-card ul { margin: 10px 0; padding-left: 20px; }
+  .intro-card li { margin: 4px 0; }
+  kbd { background: #f1ede4; border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px;
+        font-size: 12px; font-family: ui-monospace, Consolas, monospace; }
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">Office <span>Casserole</span></div>
+    <nav>
+      <button data-app="write"><span class="dot"></span>Write</button>
+      <button data-app="sheets"><span class="dot"></span>Sheets</button>
+      <button data-app="slides"><span class="dot"></span>Slides</button>
+    </nav>
+    <div class="note">Each app keeps its own documents in this page's local storage.
+      File export buttons work best in the individual app demos.</div>
+  </header>
+  <main>
+    <div class="intro" id="intro">
+      <div class="intro-card">
+        <h1>Office Casserole — working vertical slices</h1>
+        <p>Pick an app above. Things worth trying:</p>
+        <ul>
+          <li><strong>Write</strong> — type with <kbd>Ctrl/Cmd-B</kbd>, watch the Reveal&nbsp;Codes
+              panel; <kbd>Ctrl/Cmd-K</kbd> for the command palette; ⊞ inserts a table
+              (click cells, <kbd>Tab</kbd> walks the grid); ⧗&nbsp;Revisions shows your attributed
+              edit history, compare &amp; restore included.</li>
+          <li><strong>Sheets</strong> — click a cell, type <kbd>=SUM(D2:D4)</kbd> or
+              <kbd>=IF(D6&gt;300,&nbsp;"YES",&nbsp;"no")</kbd>; edits ripple through dependents;
+              try a circular reference and watch <kbd>#CYCLE!</kbd> appear and recover.</li>
+          <li><strong>Slides</strong> — drag elements, double-click text to edit in place,
+              ▶ presents (arrow keys navigate, <kbd>Esc</kbd> exits).</li>
+        </ul>
+        <p>Everything is a real engine underneath — typed document models, an invertible
+           operation log, deterministic recalculation — not a mock-up.</p>
+      </div>
+    </div>
+    <iframe id="app-write" hidden loading="lazy"></iframe>
+    <iframe id="app-sheets" hidden loading="lazy"></iframe>
+    <iframe id="app-slides" hidden loading="lazy"></iframe>
+  </main>
+<script>
+  const SRC = { write: "write.html", sheets: "sheets.html", slides: "slides.html" };
+  const intro = document.getElementById("intro");
+  function show(app) {
+    intro.style.display = "none";
+    document.querySelectorAll("nav button").forEach((b) =>
+      b.classList.toggle("active", b.dataset.app === app)
+    );
+    for (const key of Object.keys(SRC)) {
+      const frame = document.getElementById("app-" + key);
+      if (key === app) {
+        if (!frame.src) frame.src = SRC[key]; // lazy-load once, then keep state
+        frame.hidden = false;
+      } else {
+        frame.hidden = true; // hidden, not unloaded — documents survive tab switches
+      }
+    }
+  }
+  document.querySelectorAll("nav button").forEach((b) =>
+    b.addEventListener("click", () => show(b.dataset.app))
+  );
+</script>
+</body>
+</html>
