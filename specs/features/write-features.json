@@ -5,23 +5,55 @@
     "name": "Core text editing with marks, blocks, and undo/redo",
     "priority": "P0",
     "description": "Type, delete, select, split and merge blocks; bold/italic/underline; H1/H2/paragraph; transaction-coalesced undo/redo via keyboard and toolbar.",
-    "baseline": { "product": "Microsoft Word", "capability": "Basic editing", "referenceDate": "2026-11", "verificationStatus": "inferred" },
+    "baseline": {
+      "product": "Microsoft Word",
+      "capability": "Basic editing",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
     "owner": "engines/document-model",
     "dependencies": [],
-    "commands": ["insertText", "deleteBackward", "deleteSelection", "splitBlock", "toggleMark", "setBlockType", "undo", "redo"],
+    "commands": [
+      "insertText",
+      "deleteBackward",
+      "deleteSelection",
+      "splitBlock",
+      "toggleMark",
+      "setBlockType",
+      "undo",
+      "redo"
+    ],
     "offlineSupport": "fully offline",
-    "edgeCases": ["backward selections", "cross-block delete", "caret-mark inheritance", "coalesced typing undo"],
+    "edgeCases": [
+      "backward selections",
+      "cross-block delete",
+      "caret-mark inheritance",
+      "coalesced typing undo"
+    ],
     "acceptance": [
       "Every operation leaves validateModel() empty",
       "Cross-block deleteRange joins first and last blocks",
       "Undo restores the exact prior state; a typing burst is one undo step",
       "Enter at end of heading starts a paragraph; mid-heading keeps the remainder a heading"
     ],
-    "verification": { "required": ["unit", "end-to-end"] },
+    "verification": {
+      "required": [
+        "unit",
+        "end-to-end"
+      ]
+    },
     "status": "tested",
     "evidence": [
-      { "kind": "test-run", "ref": "node --test: 27/27 pass (model, operations, serialize suites)", "date": "2026-11-22" },
-      { "kind": "test-run", "ref": "scripts/smoke-write.mjs jsdom boot test: pass", "date": "2026-11-22" }
+      {
+        "kind": "test-run",
+        "ref": "node --test: 27/27 pass (model, operations, serialize suites)",
+        "date": "2026-11-22"
+      },
+      {
+        "kind": "test-run",
+        "ref": "scripts/smoke-write.mjs jsdom boot test: pass",
+        "date": "2026-11-22"
+      }
     ],
     "knownLimitations": [
       "Snapshot-based undo (ADR-0001); per-operation logs deferred to collaboration phase",
@@ -34,24 +66,49 @@
     "name": "Structural Formatting Inspector (Reveal Codes)",
     "priority": "P1",
     "description": "Ordered formatting codes in document order; click a code to select its exact range; explain why formatting applies at the caret.",
-    "baseline": { "product": "WordPerfect", "capability": "Reveal Codes", "referenceDate": "2026-11", "verificationStatus": "inferred" },
+    "baseline": {
+      "product": "WordPerfect",
+      "capability": "Reveal Codes",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
     "owner": "engines/document-model",
-    "dependencies": ["WRITE-EDIT-001"],
-    "commands": ["formatting.inspect", "formatting.explain"],
+    "dependencies": [
+      "WRITE-EDIT-001"
+    ],
+    "commands": [
+      "formatting.inspect",
+      "formatting.explain"
+    ],
     "offlineSupport": "fully offline",
-    "edgeCases": ["balanced mark on/off pairs", "empty blocks", "overlapping marks"],
+    "edgeCases": [
+      "balanced mark on/off pairs",
+      "empty blocks",
+      "overlapping marks"
+    ],
     "acceptance": [
       "Inspector matches canonical document structure (text codes reconstruct docText exactly)",
       "Mark on/off codes are balanced",
       "Code click selects the affected document range",
       "explainAt names block type and active marks at any offset"
     ],
-    "verification": { "required": ["unit", "end-to-end"] },
+    "verification": {
+      "required": [
+        "unit",
+        "end-to-end"
+      ]
+    },
     "status": "tested",
     "evidence": [
-      { "kind": "test-run", "ref": "serialize.test.ts inspector suite: pass", "date": "2026-11-22" }
+      {
+        "kind": "test-run",
+        "ref": "serialize.test.ts inspector suite: pass",
+        "date": "2026-11-22"
+      }
     ],
-    "knownLimitations": ["Inspector is read+navigate; §6.2.3 in-panel code editing not yet implemented"]
+    "knownLimitations": [
+      "Inspector is read+navigate; §6.2.3 in-panel code editing not yet implemented"
+    ]
   },
   {
     "id": "WRITE-PERSIST-001",
@@ -59,23 +116,46 @@
     "name": "Autosave journal and crash recovery",
     "priority": "P0",
     "description": "Debounced autosave of the full document after each quiescent edit; reload restores the last confirmed state; corrupt journals fail safe without overwriting until the next successful edit.",
-    "baseline": { "product": "Microsoft Word", "capability": "AutoRecover", "referenceDate": "2026-11", "verificationStatus": "inferred" },
+    "baseline": {
+      "product": "Microsoft Word",
+      "capability": "AutoRecover",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
     "owner": "apps/write",
-    "dependencies": ["WRITE-EDIT-001"],
+    "dependencies": [
+      "WRITE-EDIT-001"
+    ],
     "commands": [],
     "offlineSupport": "fully offline",
-    "edgeCases": ["corrupt journal", "schema-version mismatch", "storage unavailable (artifact sandbox)"],
+    "edgeCases": [
+      "corrupt journal",
+      "schema-version mismatch",
+      "storage unavailable (artifact sandbox)"
+    ],
     "acceptance": [
       "Reload after editing restores the document",
       "Corrupt or version-mismatched journal yields a fresh document plus a user-visible notice, never a crash",
       "No save occurs before the first edit (recovery journal is not clobbered on boot)"
     ],
-    "verification": { "required": ["unit", "end-to-end"] },
+    "verification": {
+      "required": [
+        "unit",
+        "end-to-end"
+      ]
+    },
     "status": "implemented",
     "evidence": [
-      { "kind": "test-run", "ref": "smoke test asserts no premature save on boot", "date": "2026-11-22" }
+      {
+        "kind": "test-run",
+        "ref": "smoke test asserts no premature save on boot",
+        "date": "2026-11-22"
+      }
     ],
-    "knownLimitations": ["localStorage journal (ADR-0001); IndexedDB/SQLite is the recorded path", "restore round-trip not yet covered by an automated reload test"]
+    "knownLimitations": [
+      "localStorage journal (ADR-0001); IndexedDB/SQLite is the recorded path",
+      "restore round-trip not yet covered by an automated reload test"
+    ]
   },
   {
     "id": "WRITE-EXPORT-001",
@@ -83,22 +163,151 @@
     "name": "Export with per-format loss reporting",
     "priority": "P1",
     "description": "Export native JSON (lossless), HTML (lossless for the model subset), and Markdown; lossy Markdown exports present a loss report and require confirmation before a destructive export (§5.3).",
-    "baseline": { "product": "Microsoft Word", "capability": "Save As + compatibility checker", "referenceDate": "2026-11", "verificationStatus": "inferred" },
+    "baseline": {
+      "product": "Microsoft Word",
+      "capability": "Save As + compatibility checker",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
     "owner": "engines/document-model (serialize)",
-    "dependencies": ["WRITE-EDIT-001"],
-    "commands": ["export.json", "export.html", "export.markdown"],
+    "dependencies": [
+      "WRITE-EDIT-001"
+    ],
+    "commands": [
+      "export.json",
+      "export.html",
+      "export.markdown"
+    ],
     "offlineSupport": "fully offline",
-    "edgeCases": ["underline in Markdown", "HTML escaping", "invalid JSON import rejection"],
+    "edgeCases": [
+      "underline in Markdown",
+      "HTML escaping",
+      "invalid JSON import rejection"
+    ],
     "acceptance": [
       "JSON round-trip is byte-equal on the model",
       "Markdown export of underlined text is flagged MD-UNDERLINE-LOST and never claimed lossless",
       "fromJSON rejects unsupported schema versions and invalid structures"
     ],
-    "verification": { "required": ["unit", "compatibility"] },
+    "verification": {
+      "required": [
+        "unit",
+        "compatibility"
+      ]
+    },
     "status": "tested",
     "evidence": [
-      { "kind": "test-run", "ref": "serialize.test.ts: pass", "date": "2026-11-22" }
+      {
+        "kind": "test-run",
+        "ref": "serialize.test.ts: pass",
+        "date": "2026-11-22"
+      }
     ],
-    "knownLimitations": ["DOCX/ODT/PDF converters not yet implemented; they join the same loss-report pipeline (§5.2)"]
+    "knownLimitations": [
+      "DOCX/ODT/PDF converters not yet implemented; they join the same loss-report pipeline (§5.2)"
+    ]
+  },
+  {
+    "id": "WRITE-PERSIST-002",
+    "application": "casserole-write",
+    "name": "Durable multi-document store with Files surface",
+    "priority": "P0",
+    "description": "Multiple named documents in IndexedDB (localStorage and in-memory fallbacks with user-visible durability class); document list, rename, create, delete; one-time migration of the v1 journal.",
+    "baseline": {
+      "product": "Microsoft Word + OneDrive",
+      "capability": "Recent documents / local storage",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
+    "owner": "apps/write (store.ts)",
+    "dependencies": [
+      "WRITE-PERSIST-001"
+    ],
+    "commands": [
+      "files.list",
+      "files.open",
+      "files.create",
+      "files.rename",
+      "files.delete"
+    ],
+    "offlineSupport": "fully offline",
+    "edgeCases": [
+      "IndexedDB unavailable",
+      "corrupt stored doc left untouched",
+      "legacy journal retired only after successful migration"
+    ],
+    "acceptance": [
+      "Fresh boot seeds and persists a document; list shows it",
+      "v1 journal imports once and is removed only after the new save succeeds",
+      "Degraded storage is reported to the user, never silent"
+    ],
+    "verification": {
+      "required": [
+        "unit",
+        "end-to-end"
+      ]
+    },
+    "status": "tested",
+    "evidence": [
+      {
+        "kind": "test-run",
+        "ref": "scripts/smoke-write.mjs scenarios 1–2: pass",
+        "date": "2026-11-22"
+      }
+    ],
+    "knownLimitations": [
+      "IndexedDB path exercised in browsers, not in jsdom CI (falls back to localStorage there)"
+    ]
+  },
+  {
+    "id": "WRITE-CONV-001",
+    "application": "casserole-write",
+    "name": "DOCX export/import with loss reports",
+    "priority": "P0",
+    "description": "Export the document as a .docx package; open .docx files mapping paragraphs, Heading1/2, bold/italic/underline; every unsupported construct is kept where possible and reported, never silently dropped.",
+    "baseline": {
+      "product": "Microsoft Word",
+      "capability": "DOCX (ECMA-376 subset)",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
+    "owner": "engines/format-conversion",
+    "dependencies": [
+      "WRITE-EDIT-001"
+    ],
+    "commands": [
+      "export.docx",
+      "import.docx"
+    ],
+    "offlineSupport": "fully offline",
+    "edgeCases": [
+      "tables flattened with warning",
+      "hyperlink text kept, target reported lost",
+      "Heading3+ mapped down with warning",
+      "corrupt zip rejected via CRC"
+    ],
+    "acceptance": [
+      "Export → import round-trip preserves structure, text, and marks for the model subset",
+      "Import of unsupported content yields DOCX-IMPORT-* warnings and keeps the text",
+      "Non-DOCX and corrupt input fails loudly"
+    ],
+    "verification": {
+      "required": [
+        "unit",
+        "compatibility"
+      ]
+    },
+    "status": "tested",
+    "evidence": [
+      {
+        "kind": "test-run",
+        "ref": "engines/format-conversion/test/docx.test.ts: 7 tests pass",
+        "date": "2026-11-22"
+      }
+    ],
+    "knownLimitations": [
+      "Fixture corpus is self-generated + synthetic; no real-Word differential corpus yet (§22.2), so status stays below verified",
+      "No Original Format Preservation store yet: import is one-way into the native model"
+    ]
   }
 ]

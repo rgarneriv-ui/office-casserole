@@ -1,0 +1,101 @@
+[
+  {
+    "id": "SHEETS-CALC-001",
+    "application": "casserole-sheets",
+    "name": "Deterministic calculation engine with incremental recalc",
+    "priority": "P0",
+    "description": "Formulas with references, ranges, operators, and 17 functions; typed error values that propagate; cycle detection with recovery; only dirty dependents re-evaluate on edit.",
+    "baseline": {
+      "product": "Microsoft Excel",
+      "capability": "Formula evaluation core",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
+    "owner": "engines/spreadsheet-calc",
+    "dependencies": [],
+    "commands": [
+      "cell.set",
+      "cell.get"
+    ],
+    "offlineSupport": "fully offline",
+    "edgeCases": [
+      "self-reference",
+      "forward references",
+      "percent literals",
+      "text/number comparison ordering",
+      "right-associative ^"
+    ],
+    "acceptance": [
+      "Eval-count proves incremental recalculation",
+      "Cycles flag every participant #CYCLE! and recover when broken",
+      "Errors propagate through operators and aggregates"
+    ],
+    "verification": {
+      "required": [
+        "unit"
+      ]
+    },
+    "status": "tested",
+    "evidence": [
+      {
+        "kind": "test-run",
+        "ref": "engines/spreadsheet-calc/test/calc.test.ts: 14 tests pass",
+        "date": "2026-11-22"
+      }
+    ],
+    "knownLimitations": [
+      "No differential testing against Excel yet (§7.2); no dynamic arrays, volatile functions, or external data"
+    ]
+  },
+  {
+    "id": "SHEETS-GRID-001",
+    "application": "casserole-sheets",
+    "name": "Grid application slice",
+    "priority": "P1",
+    "description": "12×40 grid rendering engine values, formula-bar editing, Enter/Tab/arrow navigation, numeric/error styling, autosave, CSV export of displayed values.",
+    "baseline": {
+      "product": "Microsoft Excel",
+      "capability": "Worksheet grid basics",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
+    "owner": "apps/sheets",
+    "dependencies": [
+      "SHEETS-CALC-001"
+    ],
+    "commands": [
+      "grid.select",
+      "grid.commit",
+      "export.csv",
+      "sheet.clear"
+    ],
+    "offlineSupport": "fully offline",
+    "edgeCases": [
+      "edit ripples across dependents",
+      "autosave round-trip",
+      "CSV quoting"
+    ],
+    "acceptance": [
+      "Boot renders seeded model with computed values",
+      "Formula-bar commit updates all dependents in one edit",
+      "Autosave persists inputs (not values) and restores them"
+    ],
+    "verification": {
+      "required": [
+        "unit",
+        "end-to-end"
+      ]
+    },
+    "status": "tested",
+    "evidence": [
+      {
+        "kind": "test-run",
+        "ref": "scripts/smoke-sheets.mjs: pass (boot, ripple, autosave)",
+        "date": "2026-11-22"
+      }
+    ],
+    "knownLimitations": [
+      "Fixed grid size; no cell ranges selection, formatting, undo, or charts yet"
+    ]
+  }
+]
