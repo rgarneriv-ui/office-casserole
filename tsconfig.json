@@ -1,0 +1,18 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "node16",
+    "moduleResolution": "node16",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "outDir": "build",
+    "declaration": true,
+    "skipLibCheck": true,
+    "lib": ["ES2022", "DOM"]
+  },
+  "include": [
+    "engines/document-model/src/**/*.ts",
+    "engines/document-model/test/**/*.ts",
+    "packages/shared-types/src/**/*.ts"
+  ]
+}

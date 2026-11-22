@@ -1,0 +1,104 @@
+[
+  {
+    "id": "WRITE-EDIT-001",
+    "application": "casserole-write",
+    "name": "Core text editing with marks, blocks, and undo/redo",
+    "priority": "P0",
+    "description": "Type, delete, select, split and merge blocks; bold/italic/underline; H1/H2/paragraph; transaction-coalesced undo/redo via keyboard and toolbar.",
+    "baseline": { "product": "Microsoft Word", "capability": "Basic editing", "referenceDate": "2026-11", "verificationStatus": "inferred" },
+    "owner": "engines/document-model",
+    "dependencies": [],
+    "commands": ["insertText", "deleteBackward", "deleteSelection", "splitBlock", "toggleMark", "setBlockType", "undo", "redo"],
+    "offlineSupport": "fully offline",
+    "edgeCases": ["backward selections", "cross-block delete", "caret-mark inheritance", "coalesced typing undo"],
+    "acceptance": [
+      "Every operation leaves validateModel() empty",
+      "Cross-block deleteRange joins first and last blocks",
+      "Undo restores the exact prior state; a typing burst is one undo step",
+      "Enter at end of heading starts a paragraph; mid-heading keeps the remainder a heading"
+    ],
+    "verification": { "required": ["unit", "end-to-end"] },
+    "status": "tested",
+    "evidence": [
+      { "kind": "test-run", "ref": "node --test: 27/27 pass (model, operations, serialize suites)", "date": "2026-11-22" },
+      { "kind": "test-run", "ref": "scripts/smoke-write.mjs jsdom boot test: pass", "date": "2026-11-22" }
+    ],
+    "knownLimitations": [
+      "Snapshot-based undo (ADR-0001); per-operation logs deferred to collaboration phase",
+      "End-to-end tests cover boot/render; full input-simulation E2E not yet automated — status stays below verified"
+    ]
+  },
+  {
+    "id": "WRITE-FMT-001",
+    "application": "casserole-write",
+    "name": "Structural Formatting Inspector (Reveal Codes)",
+    "priority": "P1",
+    "description": "Ordered formatting codes in document order; click a code to select its exact range; explain why formatting applies at the caret.",
+    "baseline": { "product": "WordPerfect", "capability": "Reveal Codes", "referenceDate": "2026-11", "verificationStatus": "inferred" },
+    "owner": "engines/document-model",
+    "dependencies": ["WRITE-EDIT-001"],
+    "commands": ["formatting.inspect", "formatting.explain"],
+    "offlineSupport": "fully offline",
+    "edgeCases": ["balanced mark on/off pairs", "empty blocks", "overlapping marks"],
+    "acceptance": [
+      "Inspector matches canonical document structure (text codes reconstruct docText exactly)",
+      "Mark on/off codes are balanced",
+      "Code click selects the affected document range",
+      "explainAt names block type and active marks at any offset"
+    ],
+    "verification": { "required": ["unit", "end-to-end"] },
+    "status": "tested",
+    "evidence": [
+      { "kind": "test-run", "ref": "serialize.test.ts inspector suite: pass", "date": "2026-11-22" }
+    ],
+    "knownLimitations": ["Inspector is read+navigate; §6.2.3 in-panel code editing not yet implemented"]
+  },
+  {
+    "id": "WRITE-PERSIST-001",
+    "application": "casserole-write",
+    "name": "Autosave journal and crash recovery",
+    "priority": "P0",
+    "description": "Debounced autosave of the full document after each quiescent edit; reload restores the last confirmed state; corrupt journals fail safe without overwriting until the next successful edit.",
+    "baseline": { "product": "Microsoft Word", "capability": "AutoRecover", "referenceDate": "2026-11", "verificationStatus": "inferred" },
+    "owner": "apps/write",
+    "dependencies": ["WRITE-EDIT-001"],
+    "commands": [],
+    "offlineSupport": "fully offline",
+    "edgeCases": ["corrupt journal", "schema-version mismatch", "storage unavailable (artifact sandbox)"],
+    "acceptance": [
+      "Reload after editing restores the document",
+      "Corrupt or version-mismatched journal yields a fresh document plus a user-visible notice, never a crash",
+      "No save occurs before the first edit (recovery journal is not clobbered on boot)"
+    ],
+    "verification": { "required": ["unit", "end-to-end"] },
+    "status": "implemented",
+    "evidence": [
+      { "kind": "test-run", "ref": "smoke test asserts no premature save on boot", "date": "2026-11-22" }
+    ],
+    "knownLimitations": ["localStorage journal (ADR-0001); IndexedDB/SQLite is the recorded path", "restore round-trip not yet covered by an automated reload test"]
+  },
+  {
+    "id": "WRITE-EXPORT-001",
+    "application": "casserole-write",
+    "name": "Export with per-format loss reporting",
+    "priority": "P1",
+    "description": "Export native JSON (lossless), HTML (lossless for the model subset), and Markdown; lossy Markdown exports present a loss report and require confirmation before a destructive export (§5.3).",
+    "baseline": { "product": "Microsoft Word", "capability": "Save As + compatibility checker", "referenceDate": "2026-11", "verificationStatus": "inferred" },
+    "owner": "engines/document-model (serialize)",
+    "dependencies": ["WRITE-EDIT-001"],
+    "commands": ["export.json", "export.html", "export.markdown"],
+    "offlineSupport": "fully offline",
+    "edgeCases": ["underline in Markdown", "HTML escaping", "invalid JSON import rejection"],
+    "acceptance": [
+      "JSON round-trip is byte-equal on the model",
+      "Markdown export of underlined text is flagged MD-UNDERLINE-LOST and never claimed lossless",
+      "fromJSON rejects unsupported schema versions and invalid structures"
+    ],
+    "verification": { "required": ["unit", "compatibility"] },
+    "status": "tested",
+    "evidence": [
+      { "kind": "test-run", "ref": "serialize.test.ts: pass", "date": "2026-11-22" }
+    ],
+    "knownLimitations": ["DOCX/ODT/PDF converters not yet implemented; they join the same loss-report pipeline (§5.2)"]
+  }
+]

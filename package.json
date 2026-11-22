@@ -1,0 +1,18 @@
+{
+  "name": "office-casserole",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Office Casserole — AI-native productivity suite. Phase 0/1 platform foundation + Phase 2 Casserole Write vertical slice.",
+  "scripts": {
+    "build:engine": "tsc -p tsconfig.json",
+    "test": "npm run build:engine && node --test build/engines/document-model/test/*.test.js",
+    "build:write": "node scripts/build-write.mjs",
+    "build": "npm run build:engine && npm run build:write"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "esbuild": "^0.24.0",
+    "jsdom": "^31.0.1",
+    "typescript": "^5.6.0"
+  }
+}

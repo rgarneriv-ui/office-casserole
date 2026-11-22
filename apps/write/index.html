@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Casserole Write — vertical slice</title>
+<style>
+  :root {
+    --bg: #f4f1ea; --panel: #ffffff; --ink: #2b2620; --accent: #b4552d;
+    --muted: #8a8378; --line: #e3ddd2; --code-bg: #26221c; --code-ink: #d8d2c6;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: "Avenir Next", "Segoe UI", system-ui, sans-serif;
+         background: var(--bg); color: var(--ink); height: 100vh; display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px;
+           background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header .logo { font-weight: 700; letter-spacing: .02em; }
+  header .logo em { color: var(--accent); font-style: normal; }
+  .tools { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  button, select { font: inherit; font-size: 13px; padding: 5px 10px; border: 1px solid var(--line);
+           background: #faf8f3; border-radius: 6px; cursor: pointer; color: var(--ink); }
+  button:hover { border-color: var(--accent); }
+  button.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  #btn-bold { font-weight: 700; } #btn-italic { font-style: italic; } #btn-underline { text-decoration: underline; }
+  .spacer { flex: 1; }
+  #status { font-size: 12px; color: var(--muted); }
+  main { flex: 1; display: flex; min-height: 0; }
+  .page-wrap { flex: 1.5; overflow: auto; padding: 28px; }
+  #editor { max-width: 760px; margin: 0 auto; background: var(--panel); min-height: 80%;
+            padding: 56px 64px; border-radius: 3px; box-shadow: 0 2px 14px rgba(43,38,32,.10);
+            outline: none; line-height: 1.55; font-family: Georgia, "Times New Roman", serif; font-size: 17px; }
+  #editor h1 { font-size: 30px; margin: 0 0 12px; line-height: 1.2; }
+  #editor h2 { font-size: 22px; margin: 18px 0 8px; }
+  #editor p { margin: 0 0 10px; }
+  .m-bold { font-weight: 700; } .m-italic { font-style: italic; } .m-underline { text-decoration: underline; }
+  aside { flex: 1; max-width: 420px; display: flex; flex-direction: column;
+          border-left: 1px solid var(--line); background: var(--code-bg); min-width: 280px; }
+  aside h3 { margin: 0; padding: 10px 14px; color: var(--code-ink); font-size: 12px;
+             text-transform: uppercase; letter-spacing: .12em; border-bottom: 1px solid #3a352c; }
+  #codes { flex: 1; overflow: auto; padding: 12px 14px; font-family: "SF Mono", ui-monospace, Consolas, monospace;
+           font-size: 12.5px; line-height: 1.9; color: var(--code-ink); word-break: break-word; }
+  .code { cursor: pointer; border-radius: 4px; padding: 1px 2px; }
+  .code:hover { outline: 1px solid var(--accent); }
+  .code-block { color: #e9b872; font-weight: 600; }
+  .code-mark { color: #8fc7a6; }
+  .code-text { color: var(--code-ink); }
+  #explain { padding: 10px 14px; font-size: 12px; color: #b8b1a4; border-top: 1px solid #3a352c;
+             line-height: 1.5; min-height: 54px; }
+  @media (max-width: 860px) { aside { display: none; } }
+</style>
+</head>
+<body>
+  <header>
+    <span class="logo">Casserole <em>Write</em></span>
+    <div class="tools">
+      <button id="btn-undo" title="Undo (Ctrl/Cmd-Z)">↶</button>
+      <button id="btn-redo" title="Redo (Ctrl/Cmd-Y)">↷</button>
+      <select id="block-type" title="Block type">
+        <option value="paragraph">Paragraph</option>
+        <option value="heading1">Heading 1</option>
+        <option value="heading2">Heading 2</option>
+      </select>
+      <button id="btn-bold" title="Bold (Ctrl/Cmd-B)">B</button>
+      <button id="btn-italic" title="Italic (Ctrl/Cmd-I)">I</button>
+      <button id="btn-underline" title="Underline (Ctrl/Cmd-U)">U</button>
+      <button id="btn-export-md" title="Export Markdown (with loss report)">↓ MD</button>
+      <button id="btn-export-html" title="Export HTML">↓ HTML</button>
+      <button id="btn-export-json" title="Export native JSON">↓ JSON</button>
+      <button id="btn-new" title="New document">New</button>
+    </div>
+    <span class="spacer"></span>
+    <span id="status">Ready</span>
+  </header>
+  <main>
+    <div class="page-wrap">
+      <div id="editor" contenteditable="true" spellcheck="true"></div>
+    </div>
+    <aside>
+      <h3>Reveal Codes — structural inspector</h3>
+      <div id="codes"></div>
+      <div id="explain">Click in the document to see why formatting applies at the caret; click a code to select its range.</div>
+    </aside>
+  </main>
+  <script src="bundle.js"></script>
+</body>
+</html>
