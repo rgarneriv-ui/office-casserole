@@ -172,3 +172,56 @@ test("recorded ops are decoupled from later model mutation (no aliasing)", () =>
   log.undo(m);
   assert.equal(snap(m), before, "second txn undone independently");
 });
+
+test("commit listener: coalesced bursts deliver once; flush closes; undo/redo journal as new ops", () => {
+  const m: DocModel = { schemaVersion: SCHEMA_VERSION, blocks: [newBlock("paragraph", [])] };
+  const log = new TransactionLog();
+  const committed: { ops: PrimOp[]; key: string | null }[] = [];
+  log.onCommit((t) => committed.push({ ops: t.ops, key: t.key }));
+
+  const t0 = 1000;
+  log.begin("type", t0);
+  insertText(m, { block: 0, offset: 0 }, "a", [], log);
+  log.begin("type", t0 + 100);
+  insertText(m, { block: 0, offset: 1 }, "b", [], log);
+  assert.equal(committed.length, 0, "open transaction not delivered yet");
+
+  log.begin(null, t0 + 200); // non-coalescing begin closes the burst
+  toggleMark(m, { anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 2 } }, "bold", log);
+  assert.equal(committed.length, 1, "burst delivered once");
+  assert.equal(committed[0]!.key, "type");
+  assert.equal(committed[0]!.ops.length, 2);
+
+  log.flush();
+  assert.equal(committed.length, 2, "flush delivered the open transaction");
+
+  // flushed txn never coalesces again
+  log.begin("type", t0 + 300);
+  insertText(m, { block: 0, offset: 2 }, "c", [], log);
+  log.flush();
+  assert.equal(committed.length, 3, "post-flush typing is a fresh transaction");
+
+  // undo reports inverse ops; redo reports the originals
+  const journalOps: PrimOp[] = [];
+  const rec = { record: (op: PrimOp) => void journalOps.push(op) };
+  assert.ok(log.undo(m, rec));
+  assert.equal(journalOps.length, 1, "undo journaled its inverse");
+  assert.equal(docText(m), "ab");
+  assert.ok(log.redo(m, rec));
+  assert.equal(journalOps.length, 2, "redo journaled its ops");
+  assert.equal(docText(m), "abc");
+  assert.equal(committed.length, 3, "redo does not re-deliver via commit listener");
+
+  // replaying: a journal fed from commits + undo/redo recs matches the model
+  const { DocumentJournal } = require("../src/journal") as typeof import("../src/journal");
+  const j = new DocumentJournal({ schemaVersion: SCHEMA_VERSION, blocks: [newBlock("paragraph", [])] });
+  // feed in order: 3 committed txns, then the undo inverse, then the redo op
+  const seed = m.blocks[0]!.id;
+  void seed;
+  const flat: PrimOp[][] = [...committed.map((c) => c.ops), [journalOps[0]!], [journalOps[1]!]];
+  const j2base: DocModel = { schemaVersion: SCHEMA_VERSION, blocks: [{ id: "replay-base", type: "paragraph", runs: [] }] };
+  void j2base;
+  for (const ops of flat) j.append("tester", ops);
+  const replayed = j.replay();
+  assert.equal(docText(replayed), docText(m), "journal replay matches live model text");
+});

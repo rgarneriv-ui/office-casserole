@@ -122,11 +122,12 @@ files saved by actual Office applications are the ones that matter most.
 
 1. Grow the fixture corpus with real Word/Excel/PowerPoint files; Original
    Format Preservation store (§5.1) for round-tripping unknown parts.
-2. Wire the collaboration substrate into Write at runtime: record into a
-   DocumentJournal, add the relay protocol (§14.3 cursor exchange),
-   conflict-presentation UX, and authorship display; convert revisions to
-   log checkpoints (ADR-0008). The engine side (journal + OT with TP1
-   convergence proofs and a two-replica simulation) is done — ADR-0010.
+2. Relay protocol (§14.3 cursor exchange), presence, and conflict UX —
+   the first work that needs a second machine. Write already records into
+   an attributed DocumentJournal at runtime (undo/redo journal as inverse
+   transactions; replay-verified on open), and the OT layer has TP1
+   convergence proofs plus a two-replica simulation (ADR-0009/0010).
+   Remaining: revisions as log checkpoints (ADR-0008).
 3. Intra-block (run-level) diff; review branches and semantic merge (§14.2
    top layer); migrate Slides deck undo to the op-log pattern.
 4. Full command-registry inversion; palettes for Sheets/Slides; font

@@ -23,6 +23,8 @@ export interface StoredDoc extends StoredDocMeta {
   doc: unknown; // engine DocModel as plain JSON
   /** §14.2 middle layer: named, stable, restorable content states. */
   revisions?: StoredRevision[];
+  /** §14.1 attributed operation journal (DocumentJournal JSON). */
+  journal?: string;
 }
 
 export type Durability = "durable" | "session" | "memory-only";

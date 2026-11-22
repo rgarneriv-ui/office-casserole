@@ -104,3 +104,34 @@ console.log("SMOKE OK — command palette");
   assert(doc.querySelector('#editor [data-block="0"]').tagName === "H1", "restore recovered the revision");
 }
 console.log("SMOKE OK — revisions save/compare/restore");
+
+// Scenario 5: live journal — commands journal with authorship; journal persists and replays
+{
+  const dom = await bootDom();
+  const doc = dom.window.document;
+  dom.window.confirm = () => true;
+  // run two commands through the palette
+  for (const q of ["heading 2", "bold"]) {
+    doc.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true, cancelable: true }));
+    const input = doc.getElementById("pal-input");
+    input.value = q;
+    input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    await new Promise(r => setTimeout(r, 50));
+  }
+  await new Promise(r => setTimeout(r, 700)); // autosave flushes the log into the journal
+  // activity list shows attributed transactions
+  doc.getElementById("btn-revisions").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  const actRows = doc.querySelectorAll("#rev-list .act-row");
+  assert(actRows.length >= 1, "activity rows rendered: " + actRows.length);
+  const actor = dom.window.localStorage.getItem("casserole:actor");
+  assert(actor && doc.querySelector("#rev-list .act-actor").textContent === actor, "transactions attributed to the local actor");
+  // the persisted journal parses and replays to the saved document
+  const index = JSON.parse(dom.window.localStorage.getItem("casserole-write:v2:index"));
+  const stored = JSON.parse(dom.window.localStorage.getItem("casserole-write:v2:doc:" + index[0].id));
+  assert(typeof stored.journal === "string", "journal persisted with the document");
+  const jdata = JSON.parse(stored.journal);
+  assert(jdata.formatVersion === "1.0" && jdata.entries.length >= 1, "journal has attributed entries");
+  assert(jdata.entries.every(e => e.actorId === actor), "every entry carries the actor");
+}
+console.log("SMOKE OK — live journal + authorship");

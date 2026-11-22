@@ -581,7 +581,7 @@
     "application": "casserole-write",
     "name": "Operation journal + transform/rebase substrate",
     "priority": "P0",
-    "description": "Serializable attributed op journal (append/replay/compact, schema-validated) and OT over the primitive set with explicit tie-breaks and transaction-granular conflict surfacing; two concurrent replicas converge by rebase.",
+    "description": "Serializable attributed op journal (append/replay/compact, schema-validated) and OT over the primitive set with explicit tie-breaks and transaction-granular conflict surfacing; two concurrent replicas converge by rebase. Write records into the journal at runtime: transactions commit on close with actor attribution, undo/redo journal as inverse transactions, the journal persists with the document (compacted past 300 entries) and is replay-verified on open; recent activity is surfaced in the Revisions panel.",
     "baseline": {
       "product": "Google Docs",
       "capability": "Collaborative editing substrate (reference behavior)",
@@ -623,10 +623,17 @@
         "kind": "test-run",
         "ref": "transform.test.ts: 9 suites incl. TP1 matrix + two-replica simulation (100 unit total)",
         "date": "2026-11-22"
+      },
+      {
+        "kind": "test-run",
+        "ref": "oplog commit-listener suite + smoke scenario 5 (attributed journal persists and parses): pass",
+        "date": "2026-11-22"
       }
     ],
     "knownLimitations": [
-      "TP2 not claimed (client/relay topology assumed); no network relay, presence, or conflict UX yet; Write does not yet record into a journal at runtime"
+      "TP2 not claimed (client/relay topology assumed)",
+      "No network relay, presence, or conflict UX yet",
+      "Actor identity is a local pseudonymous id (no accounts)"
     ]
   }
 ]

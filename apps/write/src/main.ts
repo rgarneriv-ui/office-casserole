@@ -39,6 +39,8 @@ import {
 
 import { DocumentStore, StoredRevision, newDocId, openBestStore } from "./store";
 import { diffModels, diffSummary } from "../../../engines/document-model/src/diff";
+import { DocumentJournal, OpTransaction } from "../../../engines/document-model/src/journal";
+import { PrimOp } from "../../../engines/document-model/src/oplog";
 import { CommandDefinition } from "../../../packages/shared-types/src/resource";
 import { exportDocx, importDocx } from "../../../engines/format-conversion/src/docx";
 import { exportPdf } from "../../../engines/pdf-engine/src/pdf";
@@ -50,6 +52,33 @@ let model: DocModel = newDocument();
 let selection: DocRange = { anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 0 } };
 let caretMarks: Mark[] | null = null; // pending marks for a collapsed caret
 const log = new TransactionLog();
+
+// ---------- authorship + journal (§14.1, live wiring per ADR-0010) ----------
+function initActorId(): string {
+  try {
+    const existing = localStorage.getItem("casserole:actor");
+    if (existing) return existing;
+    const fresh = `local-${Math.random().toString(36).slice(2, 8)}`;
+    localStorage.setItem("casserole:actor", fresh);
+    return fresh;
+  } catch {
+    return "local";
+  }
+}
+const actorId = initActorId();
+let journal: DocumentJournal | null = null;
+
+log.onCommit((txn) => {
+  try {
+    journal?.append(actorId, txn.ops);
+  } catch (err) {
+    console.error("journal append failed:", err);
+  }
+});
+
+function snapModel(m: DocModel): string {
+  return JSON.stringify(JSON.parse(toJSON(m)));
+}
 let saveTimer: number | null = null;
 let recovered = false;
 
@@ -78,6 +107,11 @@ let revisions: StoredRevision[] = [];
 async function save(): Promise<void> {
   if (!store) return;
   try {
+    log.flush(); // close the open transaction so the journal is current
+    if (journal && journal.size() > 300) {
+      const entries = journal.list();
+      journal.compact(entries[entries.length - 150]!.seq - 1);
+    }
     currentTitle = (titleEl?.value || "Untitled document").trim() || "Untitled document";
     await store.save({
       id: currentDocId,
@@ -85,6 +119,7 @@ async function save(): Promise<void> {
       updatedAt: new Date().toISOString(),
       doc: JSON.parse(toJSON(model)),
       revisions,
+      journal: journal?.toJSON(),
     });
     dirtySinceSave = false;
     statusEl.textContent = `Saved ${new Date().toLocaleTimeString()}${durabilityNote()}`;
@@ -316,8 +351,17 @@ type CommandId =
 
 function dispatch(id: CommandId, payload?: unknown): void {
   if (id === "undo" || id === "redo") {
-    const ok = id === "undo" ? log.undo(model) : log.redo(model);
+    const journaled: PrimOp[] = [];
+    const rec = { record: (op: PrimOp) => void journaled.push(op) };
+    const ok = id === "undo" ? log.undo(model, rec) : log.redo(model, rec);
     if (ok) {
+      if (journaled.length > 0) {
+        try {
+          journal?.append(actorId, journaled, `${id}-${Date.now().toString(36)}`);
+        } catch (err) {
+          console.error("journal append failed:", err);
+        }
+      }
       selection = {
         anchor: clampPosition(model, selection.anchor),
         focus: clampPosition(model, selection.focus),
@@ -615,9 +659,30 @@ async function refreshDocList(): Promise<void> {
     .join("");
 }
 
-function resetEditorState(newModel: DocModel, title: string, id: string, revs: StoredRevision[] = []): void {
+function resetEditorState(
+  newModel: DocModel,
+  title: string,
+  id: string,
+  revs: StoredRevision[] = [],
+  journalJson?: string
+): void {
   log.clear();
   model = newModel;
+  journal = null;
+  if (journalJson) {
+    try {
+      const restored = DocumentJournal.fromJSON(journalJson);
+      // trust, then verify: the journal must replay to exactly this document
+      if (snapModel(restored.replay()) === snapModel(newModel)) {
+        journal = restored;
+      } else {
+        console.warn("journal replay mismatch; starting a fresh journal from the current state");
+      }
+    } catch (err) {
+      console.warn("stored journal unreadable; starting fresh:", err);
+    }
+  }
+  if (!journal) journal = new DocumentJournal(fromJSON(toJSON(newModel)));
   currentDocId = id;
   currentTitle = title;
   revisions = revs;
@@ -636,7 +701,7 @@ async function openDoc(id: string): Promise<void> {
     return;
   }
   try {
-    resetEditorState(fromJSON(JSON.stringify(stored.doc)), stored.title, stored.id, stored.revisions ?? []);
+    resetEditorState(fromJSON(JSON.stringify(stored.doc)), stored.title, stored.id, stored.revisions ?? [], stored.journal);
     statusEl.textContent = `Opened — last saved ${new Date(stored.updatedAt).toLocaleString()}`;
   } catch {
     statusEl.textContent = "⚠ Stored document could not be read (left untouched)";
@@ -694,13 +759,58 @@ function escapeHtmlText(t: string): string {
   return t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
 }
 
+function summarizeOps(ops: PrimOp[]): string {
+  let ins = 0;
+  let del = 0;
+  let splits = 0;
+  let merges = 0;
+  let retypes = 0;
+  let snapshots = 0;
+  for (const op of ops) {
+    if (op.t === "replace-runs") {
+      ins += op.after.reduce((n, r) => n + r.text.length, 0);
+      del += op.before.reduce((n, r) => n + r.text.length, 0);
+    } else if (op.t === "split-block") splits++;
+    else if (op.t === "merge-blocks") merges++;
+    else if (op.t === "set-block-type") retypes++;
+    else if (op.t === "replace-model") snapshots++;
+  }
+  const parts: string[] = [];
+  if (ins) parts.push(`+${ins}`);
+  if (del) parts.push(`−${del}`);
+  if (splits) parts.push(`${splits}¶`);
+  if (merges) parts.push(`${merges} merge`);
+  if (retypes) parts.push(`${retypes} retype`);
+  if (snapshots) parts.push("snapshot restore");
+  return parts.join(" ") || "no-op";
+}
+
+function activityHtml(): string {
+  if (!journal || journal.size() === 0) return "";
+  const recent: OpTransaction[] = journal.list().slice(-8).reverse();
+  const rows = recent
+    .map(
+      (t) =>
+        `<div class="act-row"><span class="act-actor">${escapeHtmlText(t.actorId)}</span>` +
+        `<span class="act-sum">${escapeHtmlText(summarizeOps(t.ops))}</span>` +
+        `<span class="act-time">${new Date(t.at).toLocaleTimeString()}</span></div>`
+    )
+    .join("");
+  return (
+    `<div class="act-head">Recent activity — ${journal.size()} transaction(s), ` +
+    `${journal.actors().map(escapeHtmlText).join(", ")}</div>` + rows
+  );
+}
+
 function renderRevisions(): void {
   if (!revList) return;
   if (revisions.length === 0) {
-    revList.innerHTML = `<div class="rev-empty">No revisions yet. "Save revision" captures a named, restorable state of this document.</div>`;
+    revList.innerHTML =
+      `<div class="rev-empty">No revisions yet. "Save revision" captures a named, restorable state of this document.</div>` +
+      activityHtml();
     return;
   }
-  revList.innerHTML = [...revisions]
+  revList.innerHTML = activityHtml() + [...revisions]
     .sort((a, b) => b.at.localeCompare(a.at))
     .map(
       (r) =>

@@ -155,18 +155,51 @@ interface Txn {
   ops: PrimOp[];
   key: string | null;
   at: number;
+  /** already delivered to the commit listener (journal) */
+  committed?: boolean;
 }
 
 const COALESCE_MS = 1000;
+
+export interface CommittedTxn {
+  ops: PrimOp[];
+  key: string | null;
+  at: number;
+}
 
 export class TransactionLog implements OpRecorder {
   private undoStack: Txn[] = [];
   private redoStack: Txn[] = [];
   private current: Txn | null = null;
   private limit: number;
+  private commitListener: ((txn: CommittedTxn) => void) | null = null;
 
   constructor(limit = 500) {
     this.limit = limit;
+  }
+
+  /** Receive each transaction exactly once, when it closes (next
+   *  non-coalescing begin, or flush). The journal subscribes here. */
+  onCommit(listener: ((txn: CommittedTxn) => void) | null): void {
+    this.commitListener = listener;
+  }
+
+  private deliver(txn: Txn): void {
+    if (txn.committed || txn.ops.length === 0) return;
+    txn.committed = true;
+    this.commitListener?.({ ops: txn.ops.map(structuredCloneOp), key: txn.key, at: txn.at });
+  }
+
+  /** Close and deliver the open transaction (call before persisting). A
+   *  flushed transaction stops coalescing so no ops can slip in after
+   *  delivery. */
+  flush(): void {
+    const top = this.undoStack[this.undoStack.length - 1];
+    if (top) {
+      this.deliver(top);
+      top.key = null; // delivered: never extended again
+    }
+    this.current = null;
   }
 
   /** Start a transaction. Consecutive begins with the same key inside the
@@ -177,12 +210,14 @@ export class TransactionLog implements OpRecorder {
       key !== null &&
       top &&
       top.key === key &&
+      !top.committed &&
       now - top.at < COALESCE_MS &&
       this.redoStack.length === 0
     ) {
       this.current = top;
       top.at = now;
     } else {
+      if (top) this.deliver(top); // previous transaction closes here
       this.current = { ops: [], key, at: now };
       this.undoStack.push(this.current);
       if (this.undoStack.length > this.limit) this.undoStack.shift();
@@ -206,26 +241,36 @@ export class TransactionLog implements OpRecorder {
     return this.redoStack.length > 0;
   }
 
-  /** Undo the last non-empty transaction against the model in place. */
-  undo(model: DocModel): boolean {
+  /** Undo the last non-empty transaction against the model in place. The
+   *  inverse ops are reported to `rec` (journal) — in a journaled world an
+   *  undo is new history, not erased history. */
+  undo(model: DocModel, rec?: OpRecorder): boolean {
     for (;;) {
       const txn = this.undoStack.pop();
       if (!txn) return false;
       this.current = null;
       if (txn.ops.length === 0) continue;
+      this.deliver(txn); // an undone txn must have reached the journal first
       for (let i = txn.ops.length - 1; i >= 0; i--) {
-        applyOp(model, invertOp(txn.ops[i]!));
+        const inv = invertOp(txn.ops[i]!);
+        rec?.record(inv);
+        applyOp(model, inv);
       }
       this.redoStack.push(txn);
       return true;
     }
   }
 
-  redo(model: DocModel): boolean {
+  redo(model: DocModel, rec?: OpRecorder): boolean {
     const txn = this.redoStack.pop();
     if (!txn) return false;
-    for (const op of txn.ops) applyOp(model, op);
-    this.undoStack.push({ ...txn, key: null, at: Date.now() });
+    for (const op of txn.ops) {
+      rec?.record(op);
+      applyOp(model, op);
+    }
+    // re-entering the undo stack as an already-journaled transaction (the
+    // redo's ops were just reported via rec)
+    this.undoStack.push({ ...txn, key: null, at: Date.now(), committed: true });
     this.current = null;
     return true;
   }
