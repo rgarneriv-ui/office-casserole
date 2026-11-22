@@ -19,6 +19,7 @@ import {
   fromJSON,
   insertText,
   inspect,
+  applyCodeAction,
   explainAt,
   isCollapsed,
   marksAt,
@@ -210,6 +211,12 @@ function render(): void {
   }
 }
 
+const BLOCK_CYCLE: Record<string, "paragraph" | "heading1" | "heading2"> = {
+  paragraph: "heading1",
+  heading1: "heading2",
+  heading2: "paragraph",
+};
+
 function renderCodes(): void {
   const codes = inspect(model);
   codesPanel.innerHTML = codes
@@ -220,12 +227,46 @@ function renderCodes(): void {
         c.kind === "text"
           ? c.label.replace(/&/g, "&amp;").replace(/</g, "&lt;")
           : c.label;
-      return `<span class="code ${cls}" data-code="${i}" title="block ${c.blockIndex + 1}, chars ${c.start}–${c.end}">${label}</span>`;
+      const actions =
+        c.kind === "mark-on" || c.kind === "mark-off"
+          ? `<button class="code-x" data-x="${i}" title="Remove this formatting span (§6.2.3)">×</button>`
+          : c.kind === "block-start"
+            ? `<button class="code-x code-cycle" data-cycle="${i}" title="Change block type">↻</button>`
+            : "";
+      return `<span class="code ${cls}" data-code="${i}" title="block ${c.blockIndex + 1}, chars ${c.start}–${c.end}">${label}${actions}</span>`;
     })
     .join("");
-  codesPanel.querySelectorAll(".code").forEach((el) => {
+  codesPanel.querySelectorAll<HTMLButtonElement>(".code-x").forEach((btn) => {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const codes2 = inspect(model);
+      if (btn.dataset.x !== undefined) {
+        const c = codes2[Number(btn.dataset.x)];
+        if (!c) return;
+        history.checkpoint(model);
+        const msg = applyCodeAction(model, c, { kind: "remove-mark" });
+        if (msg) {
+          statusEl.textContent = msg;
+          render();
+          scheduleSave();
+        }
+      } else if (btn.dataset.cycle !== undefined) {
+        const c = codes2[Number(btn.dataset.cycle)];
+        if (!c) return;
+        const next = BLOCK_CYCLE[model.blocks[c.blockIndex]?.type ?? "paragraph"]!;
+        history.checkpoint(model);
+        const msg = applyCodeAction(model, c, { kind: "set-block-type", blockType: next });
+        if (msg) {
+          statusEl.textContent = msg;
+          render();
+          scheduleSave();
+        }
+      }
+    });
+  });
+  codesPanel.querySelectorAll<HTMLElement>(".code").forEach((el) => {
     el.addEventListener("click", () => {
-      const c = inspect(model)[Number((el as HTMLElement).dataset.code)];
+      const c = inspect(model)[Number(el.dataset.code)];
       if (!c) return;
       selection = {
         anchor: { block: c.blockIndex, offset: c.start },

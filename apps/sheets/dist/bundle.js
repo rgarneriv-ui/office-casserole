@@ -990,7 +990,7 @@
       }
     }
     for (const { addr, storedValue, type } of formulas) {
-      if (storedValue === null) continue;
+      if (storedValue === null || storedValue === "") continue;
       const ours = sheet2.getCell(addr);
       let match;
       if (isError(ours)) {
