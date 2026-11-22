@@ -206,44 +206,78 @@ export function exportPdf(
   const maxWidth = PAGE_W - 2 * MARGIN;
 
   // layout: blocks → lines → pages
-  interface Placed {
+  interface PlacedText {
+    kind: "text";
     line: Line;
     y: number;
-    indent?: number;
+    x: number;
     prefix?: string | null;
   }
+  interface PlacedRule {
+    kind: "rule";
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+  }
+  type Placed = PlacedText | PlacedRule;
   const pages: Placed[][] = [];
   let page: Placed[] = [];
   let y = PAGE_H - MARGIN;
 
   const LIST_INDENT = 22; // points
   let listCounter = 0;
-  let tableNoted = false;
   model.blocks.forEach((block, bi) => {
     if (block.type === "table" && block.table) {
-      if (!tableNoted) {
-        warnings.push({
-          code: "PDF-TABLE-SIMPLIFIED",
-          message: "Tables render as text rows separated by | (no grid lines yet).",
-          blockIndex: bi,
-        });
-        tableNoted = true;
-      }
+      const pad = 4;
+      const cols = block.table[0]!.length;
+      const colW = maxWidth / cols;
+      const cellMeasure = colW - 2 * pad;
       const lineH = BODY_SIZE * LINE_FACTOR;
+      y -= 4; // breathing room above the grid
+
       for (const row of block.table) {
-        const rowText = sanitize(row.join("  |  ").replace(/\n/g, " "), warnings, bi);
-        const lines = wrapBlock([{ text: rowText, font: "R", underline: false }], BODY_SIZE, maxWidth, family);
-        for (const line of lines) {
-          if (y - lineH < MARGIN) {
-            pages.push(page);
-            page = [];
-            y = PAGE_H - MARGIN;
+        // wrap every cell (preserving explicit newlines)
+        const cellLines: Line[][] = row.map((cell) => {
+          const out: Line[] = [];
+          for (const segment of sanitize(cell, warnings, bi).split("\n")) {
+            out.push(
+              ...wrapBlock([{ text: segment, font: "R", underline: false }], BODY_SIZE, cellMeasure, family)
+            );
           }
-          y -= lineH;
-          page.push({ line, y });
+          return out;
+        });
+        const rowLines = Math.max(1, ...cellLines.map((c) => c.length));
+        const rowH = rowLines * lineH + 2 * pad;
+
+        if (y - rowH < MARGIN && page.length > 0) {
+          page.push({ kind: "rule", x1: MARGIN, y1: y, x2: MARGIN + maxWidth, y2: y });
+          pages.push(page);
+          page = [];
+          y = PAGE_H - MARGIN;
         }
+        const top = y;
+        const bottom = y - rowH;
+        // row borders: top + verticals (bottom comes from the next row's top, or the closer)
+        page.push({ kind: "rule", x1: MARGIN, y1: top, x2: MARGIN + maxWidth, y2: top });
+        for (let c = 0; c <= cols; c++) {
+          const x = MARGIN + c * colW;
+          page.push({ kind: "rule", x1: x, y1: top, x2: x, y2: bottom });
+        }
+        cellLines.forEach((linesInCell, c) => {
+          linesInCell.forEach((line, li) => {
+            page.push({
+              kind: "text",
+              line,
+              x: MARGIN + c * colW + pad,
+              y: top - pad - BODY_SIZE - li * lineH,
+            });
+          });
+        });
+        y = bottom;
       }
-      y -= BODY_SIZE * 0.5;
+      page.push({ kind: "rule", x1: MARGIN, y1: y, x2: MARGIN + maxWidth, y2: y });
+      y -= BODY_SIZE;
       return;
     }
     const isList = block.type === "bullet" || block.type === "numbered";
@@ -275,7 +309,7 @@ export function exportPdf(
         y = PAGE_H - MARGIN;
       }
       y -= lineH;
-      page.push({ line, y, indent, prefix: li === 0 ? prefix : null });
+      page.push({ kind: "text", line, y, x: MARGIN + indent, prefix: li === 0 ? prefix : null });
     });
     y -= BODY_SIZE * 0.5; // paragraph spacing
   });
@@ -284,13 +318,20 @@ export function exportPdf(
   // content streams
   const contentStreams = pages.map((placed) => {
     const ops: string[] = [];
-    for (const { line, y: ly, indent = 0, prefix } of placed) {
+    for (const item of placed) {
+      if (item.kind === "rule") {
+        ops.push(
+          `${item.x1.toFixed(2)} ${item.y1.toFixed(2)} m ${item.x2.toFixed(2)} ${item.y2.toFixed(2)} l 0.5 w S`
+        );
+        continue;
+      }
+      const { line, y: ly, prefix } = item;
       if (prefix) {
         ops.push(
           `BT /FR ${line.size} Tf ${MARGIN.toFixed(2)} ${ly.toFixed(2)} Td (${pdfEscape(prefix)}) Tj ET`
         );
       }
-      let x = MARGIN + indent;
+      let x = item.x;
       for (const span of line.spans) {
         if (span.text.length === 0) continue;
         const w = measureText(span.text, span.font, line.size, family);

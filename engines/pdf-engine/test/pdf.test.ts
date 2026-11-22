@@ -142,3 +142,43 @@ test("pdf: list items render prefixes with hanging indent; numbering restarts", 
   const content = /BT \/FR \d+ Tf (\d+\.\d+) [\d.]+ Td \(bullet item\)/.exec(text);
   assert.ok(content && Number(content[1]) > 72, "list content is indented past the margin");
 });
+
+test("pdf: tables draw a ruled grid with wrapped, column-positioned cells", () => {
+  const tbl = newBlock("table");
+  tbl.table = [
+    ["Service", "Rate"],
+    ["Contract review and markup with a fairly long description that must wrap", "$450/hr"],
+  ];
+  const model: DocModel = {
+    schemaVersion: SCHEMA_VERSION,
+    blocks: [newBlock("paragraph", [{ text: "Intro", marks: [] }]), tbl],
+  };
+  const { bytes, report } = exportPdf(model);
+  assert.equal(report.lossless, true, "grid tables need no simplification warning");
+  const text = dec.decode(bytes);
+  assert.ok(text.includes("(Service)"));
+  assert.ok(text.includes("($450/hr)"));
+  const rules = [...text.matchAll(/ m [\d.]+ [\d.]+ l 0\.5 w S/g)].length;
+  // 2 rows: 2 top rules + bottom + 3 verticals per row = at least 9
+  assert.ok(rules >= 9, `grid rules drawn: ${rules}`);
+  // two columns: 'Service' near the margin, 'Rate' in the second column
+  const sx = Number(/Tf ([\d.]+) [\d.]+ Td \(Service\)/.exec(text)![1]);
+  const rx = Number(/Tf ([\d.]+) [\d.]+ Td \(Rate\)/.exec(text)![1]);
+  assert.ok(Math.abs(sx - 76) < 1, `first column starts at margin+pad, got ${sx}`);
+  assert.ok(Math.abs(rx - (72 + 468 / 2 + 4)) < 1, `second column at half-measure, got ${rx}`);
+  // long cell wrapped onto multiple baselines in column 1
+  const col1Ys = [...text.matchAll(/Tf 76\.00 ([\d.]+) Td \((Contract|description)/g)].map((m) => Number(m[1]));
+  assert.ok(new Set(col1Ys).size >= 2, "cell content wraps to multiple lines");
+});
+
+test("pdf: long tables paginate by rows, deterministically", () => {
+  const tbl = newBlock("table");
+  tbl.table = Array.from({ length: 60 }, (_, i) => [`Row ${i + 1}`, "x".repeat(20)]);
+  const model: DocModel = { schemaVersion: SCHEMA_VERSION, blocks: [tbl] };
+  const a = exportPdf(model);
+  const b = exportPdf(model);
+  assert.deepEqual(a.bytes, b.bytes);
+  const count = Number(/\/Count (\d+)/.exec(dec.decode(a.bytes))![1]);
+  assert.ok(count > 1, `paginated: ${count} pages`);
+  assert.ok(dec.decode(a.bytes).includes("(Row 60)"), "last row present");
+});
