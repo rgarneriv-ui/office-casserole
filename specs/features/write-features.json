@@ -315,7 +315,7 @@
     "application": "casserole-write",
     "name": "PDF export with deterministic pagination",
     "priority": "P1",
-    "description": "Export the document as a paginated PDF (Courier metrics, exact line breaking); charset losses replaced and reported; fixed-pitch rendering disclosed per export.",
+    "description": "Export the document as a paginated PDF: proportional Helvetica by default using verified base-14 AFM metrics (Courier optional); charset losses replaced and reported.",
     "baseline": {
       "product": "Microsoft Word",
       "capability": "Save as PDF",
@@ -358,10 +358,15 @@
         "kind": "report",
         "ref": "pypdf cross-validation: 4-page sample parsed, text extracted",
         "date": "2026-11-22"
+      },
+      {
+        "kind": "test-run",
+        "ref": "measure-based line-width proof + pypdf re-validation (Helvetica, 3 pages)",
+        "date": "2026-11-22"
       }
     ],
     "knownLimitations": [
-      "Courier only (ADR-0006); no PDF reading, forms, signatures, or PDF/A yet"
+      "Base-14 fonts only (no embedding/subsetting); no PDF reading, forms, signatures, or PDF/A yet"
     ]
   },
   {
@@ -457,6 +462,63 @@
     ],
     "knownLimitations": [
       "File/export commands run via their wired controls; full registry inversion (controls calling the registry) is the recorded next step"
+    ]
+  },
+  {
+    "id": "WRITE-VER-001",
+    "application": "casserole-write",
+    "name": "Named revisions with compare and restore",
+    "priority": "P1",
+    "description": "Save named restorable revisions with the document; block-level comparison (LCS over stable block ids) distinguishing text from formatting-only changes; restore is undoable; unreadable revisions fail safe.",
+    "baseline": {
+      "product": "Microsoft Word",
+      "capability": "Version history (subset)",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
+    "owner": "engines/document-model (diff) + apps/write",
+    "dependencies": [
+      "WRITE-EDIT-001",
+      "WRITE-PERSIST-002"
+    ],
+    "commands": [
+      "revision.save",
+      "revision.compare",
+      "revision.restore",
+      "revision.delete"
+    ],
+    "offlineSupport": "fully offline",
+    "edgeCases": [
+      "split shows changed+added, not a cascade",
+      "formatting-only vs text change",
+      "restore goes through undo history"
+    ],
+    "acceptance": [
+      "diffModels matches blocks by id via LCS; summary counts correct on edit/split/delete",
+      "Compare panel reports counts and per-block changes",
+      "Restore recovers the revision and is undoable"
+    ],
+    "verification": {
+      "required": [
+        "unit",
+        "end-to-end"
+      ]
+    },
+    "status": "tested",
+    "evidence": [
+      {
+        "kind": "test-run",
+        "ref": "diff.test.ts: 5 tests pass",
+        "date": "2026-11-22"
+      },
+      {
+        "kind": "test-run",
+        "ref": "smoke-write.mjs scenario 4 (save/compare/restore): pass",
+        "date": "2026-11-22"
+      }
+    ],
+    "knownLimitations": [
+      "Block-granularity diff (no intra-block run diff yet); review branches/merge not yet built; revisions are full copies until op-log migration"
     ]
   }
 ]

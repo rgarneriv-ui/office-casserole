@@ -70,3 +70,37 @@ console.log("SMOKE OK — fresh boot + legacy migration");
   assert(doc.getElementById("doc-list").options.length === before + 1, "New document command executed");
 }
 console.log("SMOKE OK — command palette");
+
+// Scenario 4: revisions — save, modify via palette command, compare, restore
+{
+  const dom = await bootDom();
+  const doc = dom.window.document;
+  dom.window.prompt = () => "Baseline";
+  dom.window.confirm = () => true;
+  doc.getElementById("btn-revisions").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  assert(!doc.getElementById("revisions").hidden, "revisions panel opens");
+  doc.getElementById("btn-rev-save").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  assert(doc.querySelectorAll("#rev-list .rev-item").length === 1, "revision saved");
+
+  // change the document: run "Heading 2" via the palette (block 0 is heading1)
+  doc.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true, cancelable: true }));
+  const input = doc.getElementById("pal-input");
+  input.value = "heading 2";
+  input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await new Promise(r => setTimeout(r, 100));
+  assert(doc.querySelector('#editor [data-block="0"]').tagName === "H2", "palette command retyped block");
+
+  // compare: one formatting-only change
+  doc.getElementById("btn-revisions").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  doc.querySelector("#rev-list [data-compare]").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  const diffText = doc.querySelector("#rev-list .rev-diff").textContent;
+  assert(diffText.includes("1 changed"), "diff summary shows 1 changed: " + diffText);
+  assert(diffText.includes("formatting only"), "formatting-only change identified");
+
+  // restore brings the heading back
+  doc.querySelector("#rev-list [data-restore]").dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  await new Promise(r => setTimeout(r, 100));
+  assert(doc.querySelector('#editor [data-block="0"]').tagName === "H1", "restore recovered the revision");
+}
+console.log("SMOKE OK — revisions save/compare/restore");

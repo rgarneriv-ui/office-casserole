@@ -36,7 +36,8 @@ import {
   validateModel,
 } from "../../../engines/document-model/src/index";
 
-import { DocumentStore, newDocId, openBestStore } from "./store";
+import { DocumentStore, StoredRevision, newDocId, openBestStore } from "./store";
+import { diffModels, diffSummary } from "../../../engines/document-model/src/diff";
 import { CommandDefinition } from "../../../packages/shared-types/src/resource";
 import { exportDocx, importDocx } from "../../../engines/format-conversion/src/docx";
 import { exportPdf } from "../../../engines/pdf-engine/src/pdf";
@@ -71,6 +72,8 @@ function durabilityNote(): string {
   return "";
 }
 
+let revisions: StoredRevision[] = [];
+
 async function save(): Promise<void> {
   if (!store) return;
   try {
@@ -80,6 +83,7 @@ async function save(): Promise<void> {
       title: currentTitle,
       updatedAt: new Date().toISOString(),
       doc: JSON.parse(toJSON(model)),
+      revisions,
     });
     dirtySinceSave = false;
     statusEl.textContent = `Saved ${new Date().toLocaleTimeString()}${durabilityNote()}`;
@@ -623,10 +627,11 @@ async function refreshDocList(): Promise<void> {
     .join("");
 }
 
-function resetEditorState(newModel: DocModel, title: string, id: string): void {
+function resetEditorState(newModel: DocModel, title: string, id: string, revs: StoredRevision[] = []): void {
   model = newModel;
   currentDocId = id;
   currentTitle = title;
+  revisions = revs;
   if (titleEl) titleEl.value = title;
   selection = { anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 0 } };
   caretMarks = null;
@@ -642,7 +647,7 @@ async function openDoc(id: string): Promise<void> {
     return;
   }
   try {
-    resetEditorState(fromJSON(JSON.stringify(stored.doc)), stored.title, stored.id);
+    resetEditorState(fromJSON(JSON.stringify(stored.doc)), stored.title, stored.id, stored.revisions ?? []);
     statusEl.textContent = `Opened — last saved ${new Date(stored.updatedAt).toLocaleString()}`;
   } catch {
     statusEl.textContent = "⚠ Stored document could not be read (left untouched)";
@@ -691,6 +696,128 @@ function seedModel(): DocModel {
     })
   );
 }
+
+// ---------- revisions (§14.2 middle layer) ----------
+const revPanel = document.getElementById("revisions") as HTMLElement | null;
+const revList = document.getElementById("rev-list") as HTMLElement | null;
+
+function escapeHtmlText(t: string): string {
+  return t.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+}
+
+function renderRevisions(): void {
+  if (!revList) return;
+  if (revisions.length === 0) {
+    revList.innerHTML = `<div class="rev-empty">No revisions yet. "Save revision" captures a named, restorable state of this document.</div>`;
+    return;
+  }
+  revList.innerHTML = [...revisions]
+    .sort((a, b) => b.at.localeCompare(a.at))
+    .map(
+      (r) =>
+        `<div class="rev-item" data-rev="${r.id}">` +
+        `<div class="rev-head"><span class="rev-name">${escapeHtmlText(r.name)}</span>` +
+        `<span class="rev-time">${new Date(r.at).toLocaleString()}</span></div>` +
+        `<div class="rev-actions">` +
+        `<button data-compare="${r.id}">Compare</button>` +
+        `<button data-restore="${r.id}">Restore</button>` +
+        `<button data-revdel="${r.id}">Delete</button>` +
+        `</div><div class="rev-diff" data-diff="${r.id}"></div></div>`
+    )
+    .join("");
+  revList.querySelectorAll<HTMLButtonElement>("[data-compare]").forEach((btn) =>
+    btn.addEventListener("click", () => compareRevision(btn.dataset.compare!))
+  );
+  revList.querySelectorAll<HTMLButtonElement>("[data-restore]").forEach((btn) =>
+    btn.addEventListener("click", () => restoreRevision(btn.dataset.restore!))
+  );
+  revList.querySelectorAll<HTMLButtonElement>("[data-revdel]").forEach((btn) =>
+    btn.addEventListener("click", () => {
+      const rev = revisions.find((r) => r.id === btn.dataset.revdel);
+      if (!rev || !window.confirm(`Delete revision "${rev.name}"?`)) return;
+      revisions = revisions.filter((r) => r.id !== rev.id);
+      renderRevisions();
+      scheduleSave();
+    })
+  );
+}
+
+function compareRevision(revId: string): void {
+  const rev = revisions.find((r) => r.id === revId);
+  const target = revList?.querySelector(`[data-diff="${revId}"]`) as HTMLElement | null;
+  if (!rev || !target) return;
+  if (target.innerHTML !== "") {
+    target.innerHTML = ""; // toggle off
+    return;
+  }
+  try {
+    const revModel = fromJSON(JSON.stringify(rev.doc));
+    const entries = diffModels(revModel, model);
+    const s = diffSummary(entries);
+    const lines = entries
+      .filter((e) => e.kind !== "unchanged")
+      .map((e) => {
+        if (e.kind === "added") {
+          return `<div class="d-add">+ ${escapeHtmlText(blockText(model.blocks[e.b!]!) || "(empty block)")}</div>`;
+        }
+        if (e.kind === "removed") {
+          return `<div class="d-del">− ${escapeHtmlText(blockText(revModel.blocks[e.a!]!) || "(empty block)")}</div>`;
+        }
+        const kind = e.textChanged ? "text" : "formatting only";
+        return (
+          `<div class="d-chg">~ (${kind})<br>` +
+          `<span class="d-old">${escapeHtmlText(blockText(revModel.blocks[e.a!]!))}</span><br>` +
+          `<span class="d-new">${escapeHtmlText(blockText(model.blocks[e.b!]!))}</span></div>`
+        );
+      });
+    target.innerHTML =
+      `<div class="d-sum">${s.changed} changed · ${s.added} added · ${s.removed} removed · ${s.unchanged} unchanged</div>` +
+      (lines.join("") || `<div class="d-sum">Identical to the current document.</div>`);
+  } catch {
+    target.innerHTML = `<div class="d-sum">⚠ Revision could not be read.</div>`;
+  }
+}
+
+function restoreRevision(revId: string): void {
+  const rev = revisions.find((r) => r.id === revId);
+  if (!rev) return;
+  if (!window.confirm(`Restore revision "${rev.name}"? The current state stays in undo history.`)) return;
+  try {
+    const revModel = fromJSON(JSON.stringify(rev.doc));
+    history.checkpoint(model);
+    model = revModel;
+    selection = { anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 0 } };
+    caretMarks = null;
+    render();
+    scheduleSave();
+    statusEl.textContent = `Restored revision "${rev.name}"`;
+    renderRevisions();
+  } catch {
+    statusEl.textContent = "⚠ Revision could not be restored (left untouched)";
+  }
+}
+
+document.getElementById("btn-revisions")?.addEventListener("click", () => {
+  if (!revPanel) return;
+  revPanel.hidden = !revPanel.hidden;
+  if (!revPanel.hidden) renderRevisions();
+});
+document.getElementById("btn-rev-save")?.addEventListener("click", () => {
+  const name = window.prompt("Name this revision:", `Revision ${revisions.length + 1}`);
+  if (name === null) return;
+  revisions.push({
+    id: newDocId(),
+    name: name.trim() || `Revision ${revisions.length + 1}`,
+    at: new Date().toISOString(),
+    doc: JSON.parse(toJSON(model)),
+  });
+  renderRevisions();
+  scheduleSave();
+  statusEl.textContent = "Revision saved";
+});
+document.getElementById("btn-rev-close")?.addEventListener("click", () => {
+  if (revPanel) revPanel.hidden = true;
+});
 
 // ---------- command registry + palette (§18.2) ----------
 // One canonical implementation per command: editing commands run through

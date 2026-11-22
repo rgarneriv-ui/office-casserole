@@ -12,8 +12,17 @@ export interface StoredDocMeta {
   updatedAt: string;
 }
 
+export interface StoredRevision {
+  id: string;
+  name: string;
+  at: string;
+  doc: unknown;
+}
+
 export interface StoredDoc extends StoredDocMeta {
   doc: unknown; // engine DocModel as plain JSON
+  /** §14.2 middle layer: named, stable, restorable content states. */
+  revisions?: StoredRevision[];
 }
 
 export type Durability = "durable" | "session" | "memory-only";

@@ -119,9 +119,12 @@ files saved by actual Office applications are the ones that matter most.
 
 ## Next engineering tasks (dependency order)
 
-1. Grow the fixture corpus with real Word/Excel/PowerPoint files; add PPTX
-   import; Original Format Preservation store (§5.1).
-2. Proportional-font PDF output (ADR-0006 path); full command-registry
-   inversion (controls calling the registry); palettes for Sheets/Slides.
-3. Collaboration/versioning layer (Phase 4): operation logs replacing
-   snapshot undo (ADR-0001/0003 migration), then multi-user semantics.
+1. Grow the fixture corpus with real Word/Excel/PowerPoint files; Original
+   Format Preservation store (§5.1) for round-tripping unknown parts.
+2. Operation logs replacing snapshot undo (ADR-0001/0003 migration) — the
+   gateway to Phase-4 collaboration; revisions then become log checkpoints
+   (ADR-0008).
+3. Intra-block (run-level) diff; review branches and semantic merge (§14.2
+   top layer).
+4. Full command-registry inversion; palettes for Sheets/Slides; font
+   embedding/subsetting for non-Latin PDF output.

@@ -107,9 +107,9 @@
   {
     "id": "SLIDES-CONV-001",
     "application": "casserole-slides",
-    "name": "PPTX export",
+    "name": "PPTX export/import",
     "priority": "P1",
-    "description": "Export decks as complete PresentationML packages (slides, blank master/layout, theme) with shapes as real geometry and text runs in EMU coordinates.",
+    "description": "Export decks as complete PresentationML packages; import PPTX (slide order via rels, per-axis EMU scaling incl. 4:3, text style extraction) with PPTX-IMPORT-* loss reports for pictures, frames, groups, mixed runs, and layout-inherited geometry.",
     "baseline": {
       "product": "Microsoft PowerPoint",
       "capability": "PPTX (ECMA-376 subset)",
@@ -121,7 +121,8 @@
       "SLIDES-MODEL-001"
     ],
     "commands": [
-      "export.pptx"
+      "export.pptx",
+      "import.pptx"
     ],
     "offlineSupport": "fully offline",
     "edgeCases": [
@@ -151,10 +152,15 @@
         "kind": "report",
         "ref": "python-pptx cross-validation: 2-slide sample parsed",
         "date": "2026-11-22"
+      },
+      {
+        "kind": "test-run",
+        "ref": "import suite (round-trip, loss reports, 4:3 scaling): 4 tests pass; python-pptx fixture imports with 0 warnings",
+        "date": "2026-11-22"
       }
     ],
     "knownLimitations": [
-      "Export only (no PPTX import); no animations/media; opening in real PowerPoint not yet verified"
+      "No animations/media; mixed per-run styling flattened on import; layout-inherited placeholder geometry not resolved; opening in real PowerPoint not yet verified"
     ]
   }
 ]
