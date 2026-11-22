@@ -61,6 +61,7 @@
     <button id="btn-undo" title="Undo (Ctrl/Cmd-Z)">↶</button>
     <button id="btn-redo" title="Redo (Ctrl/Cmd-Y)">↷</button>
     <button id="btn-present" title="Present (Esc to exit)">▶ Present</button>
+    <button id="btn-export-pptx" title="Export PowerPoint (.pptx)">↓ PPTX</button>
     <button id="btn-export-json" title="Export native JSON">↓ JSON</button>
     <span class="spacer"></span>
     <span id="status">Ready</span>
@@ -237,6 +238,218 @@
       return clone(entry.model);
     }
   };
+
+  // engines/format-conversion/src/zip.ts
+  var CRC_TABLE = (() => {
+    const table = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = c & 1 ? 3988292384 ^ c >>> 1 : c >>> 1;
+      table[n] = c >>> 0;
+    }
+    return table;
+  })();
+  function crc32(data) {
+    let crc = 4294967295;
+    for (let i = 0; i < data.length; i++) {
+      crc = CRC_TABLE[(crc ^ data[i]) & 255] ^ crc >>> 8;
+    }
+    return (crc ^ 4294967295) >>> 0;
+  }
+  async function pipeThrough(data, stream) {
+    const src = new Blob([data]).stream();
+    const buf = await new Response(src.pipeThrough(stream)).arrayBuffer();
+    return new Uint8Array(buf);
+  }
+  async function deflateRaw(data) {
+    if (typeof CompressionStream === "undefined") return null;
+    return pipeThrough(data, new CompressionStream("deflate-raw"));
+  }
+  var textEncoder = new TextEncoder();
+  async function zipWrite(entries) {
+    const prepared = [];
+    const chunks = [];
+    let offset = 0;
+    for (const entry of entries) {
+      const nameBytes = textEncoder.encode(entry.name);
+      const crc = crc32(entry.data);
+      const deflated = await deflateRaw(entry.data);
+      const useDeflate = deflated !== null && deflated.length < entry.data.length;
+      const raw = useDeflate ? deflated : entry.data;
+      const method = useDeflate ? 8 : 0;
+      const header = new DataView(new ArrayBuffer(30));
+      header.setUint32(0, 67324752, true);
+      header.setUint16(4, 20, true);
+      header.setUint16(6, 0, true);
+      header.setUint16(8, method, true);
+      header.setUint16(10, 0, true);
+      header.setUint16(12, 33, true);
+      header.setUint32(14, crc, true);
+      header.setUint32(18, raw.length, true);
+      header.setUint32(22, entry.data.length, true);
+      header.setUint16(26, nameBytes.length, true);
+      header.setUint16(28, 0, true);
+      prepared.push({ nameBytes, data: entry.data, raw, method, crc, offset });
+      chunks.push(new Uint8Array(header.buffer), nameBytes, raw);
+      offset += 30 + nameBytes.length + raw.length;
+    }
+    const cdStart = offset;
+    for (const p of prepared) {
+      const cd = new DataView(new ArrayBuffer(46));
+      cd.setUint32(0, 33639248, true);
+      cd.setUint16(4, 20, true);
+      cd.setUint16(6, 20, true);
+      cd.setUint16(8, 0, true);
+      cd.setUint16(10, p.method, true);
+      cd.setUint16(12, 0, true);
+      cd.setUint16(14, 33, true);
+      cd.setUint32(16, p.crc, true);
+      cd.setUint32(20, p.raw.length, true);
+      cd.setUint32(24, p.data.length, true);
+      cd.setUint16(28, p.nameBytes.length, true);
+      cd.setUint16(30, 0, true);
+      cd.setUint16(32, 0, true);
+      cd.setUint16(34, 0, true);
+      cd.setUint16(36, 0, true);
+      cd.setUint32(38, 0, true);
+      cd.setUint32(42, p.offset, true);
+      chunks.push(new Uint8Array(cd.buffer), p.nameBytes);
+      offset += 46 + p.nameBytes.length;
+    }
+    const eocd = new DataView(new ArrayBuffer(22));
+    eocd.setUint32(0, 101010256, true);
+    eocd.setUint16(4, 0, true);
+    eocd.setUint16(6, 0, true);
+    eocd.setUint16(8, prepared.length, true);
+    eocd.setUint16(10, prepared.length, true);
+    eocd.setUint32(12, offset - cdStart, true);
+    eocd.setUint32(16, cdStart, true);
+    eocd.setUint16(20, 0, true);
+    chunks.push(new Uint8Array(eocd.buffer));
+    const total = chunks.reduce((n, c) => n + c.length, 0);
+    const out = new Uint8Array(total);
+    let pos = 0;
+    for (const c of chunks) {
+      out.set(c, pos);
+      pos += c.length;
+    }
+    return out;
+  }
+  var textDecoder = new TextDecoder();
+
+  // engines/format-conversion/src/pptx.ts
+  var textEncoder2 = new TextEncoder();
+  var EMU_PER_UNIT = 7620;
+  var PT_PER_UNIT = 0.6;
+  var SLIDE_CX = 12192e3;
+  var SLIDE_CY = 6858e3;
+  var NS_P = `xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"`;
+  var NS_A = `xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"`;
+  var NS_R = `xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"`;
+  var REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+  function xmlEscape(text) {
+    return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+  function hex6(color, fallback) {
+    const m = /^#?([0-9a-fA-F]{6})$/.exec(color ?? "");
+    return (m ? m[1] : fallback).toUpperCase();
+  }
+  function shapeXml(el, index) {
+    const off = `<a:off x="${Math.round(el.x * EMU_PER_UNIT)}" y="${Math.round(el.y * EMU_PER_UNIT)}"/>`;
+    const ext = `<a:ext cx="${Math.round(el.w * EMU_PER_UNIT)}" cy="${Math.round(el.h * EMU_PER_UNIT)}"/>`;
+    const xfrm = `<a:xfrm>${off}${ext}</a:xfrm>`;
+    const geom = `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>`;
+    if (el.kind === "rect") {
+      return `<p:sp><p:nvSpPr><p:cNvPr id="${index + 2}" name="Box ${index + 1}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm}${geom}<a:solidFill><a:srgbClr val="${hex6(el.fill, "DBE7F0")}"/></a:solidFill></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="en-US"/></a:p></p:txBody></p:sp>`;
+    }
+    const algn = el.align === "center" ? "ctr" : el.align === "right" ? "r" : "l";
+    const sz = Math.max(100, Math.round((el.size ?? 36) * PT_PER_UNIT * 100));
+    const bold = el.bold ? ` b="1"` : "";
+    const color = hex6(el.color, "222222");
+    const lines = (el.text ?? "").split("\n");
+    const paragraphs = lines.map((line) => {
+      const run = line.length > 0 ? `<a:r><a:rPr lang="en-US" sz="${sz}"${bold} dirty="0"><a:solidFill><a:srgbClr val="${color}"/></a:solidFill></a:rPr><a:t>${xmlEscape(line)}</a:t></a:r>` : `<a:endParaRPr lang="en-US" sz="${sz}"${bold}/>`;
+      return `<a:p><a:pPr algn="${algn}"/>${run}</a:p>`;
+    }).join("");
+    return `<p:sp><p:nvSpPr><p:cNvPr id="${index + 2}" name="TextBox ${index + 1}"/><p:cNvSpPr txBox="1"/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm}${geom}<a:noFill/></p:spPr><p:txBody><a:bodyPr wrap="square" rtlCol="0"/><a:lstStyle/>${paragraphs}</p:txBody></p:sp>`;
+  }
+  function slideXml(slide) {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sld ${NS_P} ${NS_A} ${NS_R}><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr>` + slide.elements.map(shapeXml).join("") + `</p:spTree></p:cSld><p:clrMapOvr><a:overrideClrMapping bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/></p:clrMapOvr></p:sld>`;
+  }
+  var CLR_MAP = `bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"`;
+  var SLIDE_MASTER = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldMaster ${NS_P} ${NS_A} ${NS_R}><p:cSld><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld><p:clrMap ${CLR_MAP}/><p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst></p:sldMaster>`;
+  var SLIDE_LAYOUT = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:sldLayout ${NS_P} ${NS_A} ${NS_R} type="blank"><p:cSld name="Blank"><p:spTree><p:nvGrpSpPr><p:cNvPr id="1" name=""/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="0" cy="0"/><a:chOff x="0" y="0"/><a:chExt cx="0" cy="0"/></a:xfrm></p:grpSpPr></p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sldLayout>`;
+  var THEME = (() => {
+    const fill = (shade) => `<a:solidFill><a:schemeClr val="phClr">${shade}</a:schemeClr></a:solidFill>`;
+    const ln = (w) => `<a:ln w="${w}" cap="flat" cmpd="sng" algn="ctr"><a:solidFill><a:schemeClr val="phClr"/></a:solidFill><a:prstDash val="solid"/></a:ln>`;
+    const effect = `<a:effectStyle><a:effectLst/></a:effectStyle>`;
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<a:theme ${NS_A} name="Casserole"><a:themeElements><a:clrScheme name="Casserole"><a:dk1><a:sysClr val="windowText" lastClr="000000"/></a:dk1><a:lt1><a:sysClr val="window" lastClr="FFFFFF"/></a:lt1><a:dk2><a:srgbClr val="26222E"/></a:dk2><a:lt2><a:srgbClr val="EFEEF4"/></a:lt2><a:accent1><a:srgbClr val="6B4B9E"/></a:accent1><a:accent2><a:srgbClr val="B4552D"/></a:accent2><a:accent3><a:srgbClr val="3C6E47"/></a:accent3><a:accent4><a:srgbClr val="2D6CB4"/></a:accent4><a:accent5><a:srgbClr val="B42D6C"/></a:accent5><a:accent6><a:srgbClr val="6CB42D"/></a:accent6><a:hlink><a:srgbClr val="0563C1"/></a:hlink><a:folHlink><a:srgbClr val="954F72"/></a:folHlink></a:clrScheme><a:fontScheme name="Casserole"><a:majorFont><a:latin typeface="Avenir Next"/><a:ea typeface=""/><a:cs typeface=""/></a:majorFont><a:minorFont><a:latin typeface="Avenir Next"/><a:ea typeface=""/><a:cs typeface=""/></a:minorFont></a:fontScheme><a:fmtScheme name="Casserole"><a:fillStyleLst>${fill("")}${fill(`<a:tint val="50000"/>`)}${fill(`<a:shade val="75000"/>`)}</a:fillStyleLst><a:lnStyleLst>${ln(6350)}${ln(12700)}${ln(19050)}</a:lnStyleLst><a:effectStyleLst>${effect}${effect}${effect}</a:effectStyleLst><a:bgFillStyleLst>${fill("")}${fill(`<a:tint val="90000"/>`)}${fill(`<a:shade val="85000"/>`)}</a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>`;
+  })();
+  function rels(entries) {
+    return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` + entries.map((e) => `<Relationship Id="${e.id}" Type="${REL_NS}/${e.type}" Target="${e.target}"/>`).join("") + `</Relationships>`;
+  }
+  async function exportPptx(deck2) {
+    const n = deck2.slides.length;
+    const contentTypes = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/><Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/><Override PartName="/ppt/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>` + deck2.slides.map(
+      (_, i) => `<Override PartName="/ppt/slides/slide${i + 1}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>`
+    ).join("") + `</Types>`;
+    const presentation = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<p:presentation ${NS_P} ${NS_A} ${NS_R}><p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst><p:sldIdLst>` + deck2.slides.map((_, i) => `<p:sldId id="${256 + i}" r:id="rId${i + 2}"/>`).join("") + `</p:sldIdLst><p:sldSz cx="${SLIDE_CX}" cy="${SLIDE_CY}"/><p:notesSz cx="${SLIDE_CY}" cy="${SLIDE_CX}"/></p:presentation>`;
+    const presRels = rels([
+      { id: "rId1", type: "slideMaster", target: "slideMasters/slideMaster1.xml" },
+      ...deck2.slides.map((_, i) => ({
+        id: `rId${i + 2}`,
+        type: "slide",
+        target: `slides/slide${i + 1}.xml`
+      }))
+    ]);
+    const entries = [
+      { name: "[Content_Types].xml", data: textEncoder2.encode(contentTypes) },
+      {
+        name: "_rels/.rels",
+        data: textEncoder2.encode(rels([{ id: "rId1", type: "officeDocument", target: "ppt/presentation.xml" }]))
+      },
+      { name: "ppt/presentation.xml", data: textEncoder2.encode(presentation) },
+      { name: "ppt/_rels/presentation.xml.rels", data: textEncoder2.encode(presRels) },
+      { name: "ppt/slideMasters/slideMaster1.xml", data: textEncoder2.encode(SLIDE_MASTER) },
+      {
+        name: "ppt/slideMasters/_rels/slideMaster1.xml.rels",
+        data: textEncoder2.encode(
+          rels([
+            { id: "rId1", type: "slideLayout", target: "../slideLayouts/slideLayout1.xml" },
+            { id: "rId2", type: "theme", target: "../theme/theme1.xml" }
+          ])
+        )
+      },
+      { name: "ppt/slideLayouts/slideLayout1.xml", data: textEncoder2.encode(SLIDE_LAYOUT) },
+      {
+        name: "ppt/slideLayouts/_rels/slideLayout1.xml.rels",
+        data: textEncoder2.encode(rels([{ id: "rId1", type: "slideMaster", target: "../slideMasters/slideMaster1.xml" }]))
+      },
+      { name: "ppt/theme/theme1.xml", data: textEncoder2.encode(THEME) }
+    ];
+    deck2.slides.forEach((slide, i) => {
+      entries.push({ name: `ppt/slides/slide${i + 1}.xml`, data: textEncoder2.encode(slideXml(slide)) });
+      entries.push({
+        name: `ppt/slides/_rels/slide${i + 1}.xml.rels`,
+        data: textEncoder2.encode(rels([{ id: "rId1", type: "slideLayout", target: "../slideLayouts/slideLayout1.xml" }]))
+      });
+    });
+    return {
+      bytes: await zipWrite(entries),
+      report: {
+        format: "pptx",
+        lossless: true,
+        warnings: []
+      }
+    };
+  }
 
   // apps/slides/src/main.ts
   var STORAGE_KEY = "casserole-slides:v1:default";
@@ -536,20 +749,36 @@
     }).catch(() => {
     });
   }
-  document.getElementById("btn-export-json")?.addEventListener("click", async () => {
-    const blob = new Blob([deckToJSON(deck)], { type: "application/json" });
+  async function deliverBlob(filename, blob) {
     if (hostDownloads) {
       try {
-        await hostDownloads.save({ filename: "deck.json", data: blob });
+        await hostDownloads.save({ filename, data: blob });
         return;
       } catch {
       }
     }
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = "deck.json";
+    a.download = filename;
     a.click();
     URL.revokeObjectURL(a.href);
+  }
+  document.getElementById("btn-export-json")?.addEventListener(
+    "click",
+    () => deliverBlob("deck.json", new Blob([deckToJSON(deck)], { type: "application/json" }))
+  );
+  document.getElementById("btn-export-pptx")?.addEventListener("click", async () => {
+    try {
+      const { bytes } = await exportPptx(deck);
+      await deliverBlob(
+        "deck.pptx",
+        new Blob([bytes], {
+          type: "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+        })
+      );
+    } catch (err) {
+      statusEl.textContent = `\u26A0 PPTX export failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
   });
   restore();
   render();

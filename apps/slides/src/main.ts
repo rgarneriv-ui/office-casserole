@@ -25,6 +25,7 @@ import {
   validateDeck,
 } from "../../../engines/presentation-model/src/model";
 import { History } from "../../../engines/document-model/src/history";
+import { exportPptx } from "../../../engines/format-conversion/src/pptx";
 
 const STORAGE_KEY = "casserole-slides:v1:default";
 
@@ -377,19 +378,35 @@ let hostDownloads: { save: (o: { filename: string; data: Blob | string }) => Pro
 if (window.claude?.use) {
   window.claude.use("downloads").then((d) => { hostDownloads = d; }).catch(() => {});
 }
-document.getElementById("btn-export-json")?.addEventListener("click", async () => {
-  const blob = new Blob([deckToJSON(deck)], { type: "application/json" });
+async function deliverBlob(filename: string, blob: Blob): Promise<void> {
   if (hostDownloads) {
     try {
-      await hostDownloads.save({ filename: "deck.json", data: blob });
+      await hostDownloads.save({ filename, data: blob });
       return;
     } catch { /* fall through */ }
   }
   const a = document.createElement("a");
   a.href = URL.createObjectURL(blob);
-  a.download = "deck.json";
+  a.download = filename;
   a.click();
   URL.revokeObjectURL(a.href);
+}
+
+document.getElementById("btn-export-json")?.addEventListener("click", () =>
+  deliverBlob("deck.json", new Blob([deckToJSON(deck)], { type: "application/json" }))
+);
+document.getElementById("btn-export-pptx")?.addEventListener("click", async () => {
+  try {
+    const { bytes } = await exportPptx(deck);
+    await deliverBlob(
+      "deck.pptx",
+      new Blob([bytes as BlobPart], {
+        type: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+      })
+    );
+  } catch (err) {
+    statusEl.textContent = `⚠ PPTX export failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
 });
 
 // ---------- boot ----------
