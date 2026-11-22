@@ -52,3 +52,21 @@ async function bootDom(prepare) {
 }
 
 console.log("SMOKE OK — fresh boot + legacy migration");
+
+// Scenario 3: command palette — Ctrl-K opens, filter, Enter runs "New document"
+{
+  const dom = await bootDom();
+  const doc = dom.window.document;
+  const before = doc.getElementById("doc-list").options.length;
+  doc.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true, cancelable: true }));
+  assert(!doc.getElementById("palette").hidden, "palette opens on Ctrl-K");
+  const input = doc.getElementById("pal-input");
+  input.value = "new doc";
+  input.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  assert(doc.querySelectorAll("#pal-list .pal-item").length === 1, "filter narrows to one command");
+  input.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  await new Promise(r => setTimeout(r, 300));
+  assert(doc.getElementById("palette").hidden, "palette closes after run");
+  assert(doc.getElementById("doc-list").options.length === before + 1, "New document command executed");
+}
+console.log("SMOKE OK — command palette");

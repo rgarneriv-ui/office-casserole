@@ -363,5 +363,100 @@
     "knownLimitations": [
       "Courier only (ADR-0006); no PDF reading, forms, signatures, or PDF/A yet"
     ]
+  },
+  {
+    "id": "WRITE-FMT-002",
+    "application": "casserole-write",
+    "name": "Reveal Codes in-panel editing",
+    "priority": "P1",
+    "description": "Remove a formatting span from its on/off code (maximal adjoining span) and retype a block from its block code, through a controlled interface that translates code actions into model operations.",
+    "baseline": {
+      "product": "WordPerfect",
+      "capability": "Reveal Codes editing",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
+    "owner": "engines/document-model",
+    "dependencies": [
+      "WRITE-FMT-001"
+    ],
+    "commands": [
+      "formatting.removeSpan",
+      "formatting.retypeBlock"
+    ],
+    "offlineSupport": "fully offline",
+    "edgeCases": [
+      "mark-off codes target the span ending there",
+      "unsupported code/action pairs are no-ops",
+      "actions checkpoint undo history"
+    ],
+    "acceptance": [
+      "remove-mark strips exactly the adjoining span and keeps validateModel empty",
+      "set-block-type retypes only the named block",
+      "unsupported combinations change nothing"
+    ],
+    "verification": {
+      "required": [
+        "unit",
+        "end-to-end"
+      ]
+    },
+    "status": "tested",
+    "evidence": [
+      {
+        "kind": "test-run",
+        "ref": "inspector-edit.test.ts: 6 tests pass",
+        "date": "2026-11-22"
+      }
+    ],
+    "knownLimitations": [
+      "Code-level editing covers marks and block types; field/section codes do not exist in the v0 model yet"
+    ]
+  },
+  {
+    "id": "WRITE-CMD-001",
+    "application": "casserole-write",
+    "name": "Command registry and palette",
+    "priority": "P1",
+    "description": "CommandDefinition registry (stable ids, names, availability predicates, undo contract, audit classification) surfaced through a Ctrl/Cmd-K palette with filtering and keyboard navigation; one implementation per command shared with the toolbar.",
+    "baseline": {
+      "product": "Microsoft 365",
+      "capability": "Search/command palette (Alt+Q)",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
+    "owner": "apps/write",
+    "dependencies": [
+      "WRITE-EDIT-001"
+    ],
+    "commands": [
+      "palette.open",
+      "palette.run"
+    ],
+    "offlineSupport": "fully offline",
+    "edgeCases": [
+      "unavailable commands (undo with empty history) are hidden",
+      "Esc restores editor selection"
+    ],
+    "acceptance": [
+      "Ctrl/Cmd-K opens; filter narrows; Enter runs the selected command through the canonical path"
+    ],
+    "verification": {
+      "required": [
+        "unit",
+        "end-to-end"
+      ]
+    },
+    "status": "tested",
+    "evidence": [
+      {
+        "kind": "test-run",
+        "ref": "smoke-write.mjs scenario 3: pass",
+        "date": "2026-11-22"
+      }
+    ],
+    "knownLimitations": [
+      "File/export commands run via their wired controls; full registry inversion (controls calling the registry) is the recorded next step"
+    ]
   }
 ]

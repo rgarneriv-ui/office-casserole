@@ -37,6 +37,7 @@ import {
 } from "../../../engines/document-model/src/index";
 
 import { DocumentStore, newDocId, openBestStore } from "./store";
+import { CommandDefinition } from "../../../packages/shared-types/src/resource";
 import { exportDocx, importDocx } from "../../../engines/format-conversion/src/docx";
 import { exportPdf } from "../../../engines/pdf-engine/src/pdf";
 
@@ -690,6 +691,187 @@ function seedModel(): DocModel {
     })
   );
 }
+
+// ---------- command registry + palette (§18.2) ----------
+// One canonical implementation per command: editing commands run through
+// dispatch; file/export commands run through their single wired control, so
+// ribbon and palette share one code path (full inversion is the next step —
+// see ADR-0003 consequences).
+const clickCmd = (id: string) => () =>
+  (document.getElementById(id) as HTMLButtonElement | null)?.click();
+
+function markCmd(mark: Mark, name: string, shortcut: string): CommandDefinition {
+  return {
+    id: `format.${mark}`,
+    name,
+    description: `Toggle ${name.toLowerCase()} on the selection`,
+    isPermitted: () => true,
+    isAvailable: () => true,
+    undoable: true,
+    shortcut,
+    auditClassification: "document-modification",
+    run: () => dispatch("toggleMark", mark),
+  };
+}
+
+function blockCmd(type: Block["type"], name: string): CommandDefinition {
+  return {
+    id: `block.${type}`,
+    name,
+    description: `Make the selected block(s) ${name.toLowerCase()}`,
+    isPermitted: () => true,
+    isAvailable: () => true,
+    undoable: true,
+    auditClassification: "document-modification",
+    run: () => dispatch("setBlockType", type),
+  };
+}
+
+const COMMANDS: CommandDefinition[] = [
+  markCmd("bold", "Bold", "Ctrl/Cmd-B"),
+  markCmd("italic", "Italic", "Ctrl/Cmd-I"),
+  markCmd("underline", "Underline", "Ctrl/Cmd-U"),
+  blockCmd("paragraph", "Paragraph"),
+  blockCmd("heading1", "Heading 1"),
+  blockCmd("heading2", "Heading 2"),
+  {
+    id: "edit.undo", name: "Undo", description: "Undo the last transaction",
+    isPermitted: () => true, isAvailable: () => history.canUndo(), undoable: false,
+    shortcut: "Ctrl/Cmd-Z", auditClassification: "document-modification",
+    run: () => dispatch("undo"),
+  },
+  {
+    id: "edit.redo", name: "Redo", description: "Redo the last undone transaction",
+    isPermitted: () => true, isAvailable: () => history.canRedo(), undoable: false,
+    shortcut: "Ctrl/Cmd-Y", auditClassification: "document-modification",
+    run: () => dispatch("redo"),
+  },
+  {
+    id: "files.new", name: "New document", description: "Create a new document",
+    isPermitted: () => true, isAvailable: () => store !== null, undoable: false,
+    auditClassification: "document-modification", run: clickCmd("btn-new"),
+  },
+  {
+    id: "files.delete", name: "Delete document", description: "Delete the current document (confirms first)",
+    isPermitted: () => true, isAvailable: () => store !== null, undoable: false,
+    auditClassification: "document-modification", run: clickCmd("btn-delete"),
+  },
+  {
+    id: "files.open", name: "Open file (.docx / .json)", description: "Import a Word or native JSON document",
+    isPermitted: () => true, isAvailable: () => true, undoable: false,
+    auditClassification: "document-modification", run: clickCmd("btn-open"),
+  },
+  {
+    id: "export.docx", name: "Export DOCX", description: "Download as a Word document",
+    isPermitted: () => true, isAvailable: () => true, undoable: false,
+    auditClassification: "export", run: clickCmd("btn-export-docx"),
+  },
+  {
+    id: "export.pdf", name: "Export PDF", description: "Download as a paginated PDF",
+    isPermitted: () => true, isAvailable: () => true, undoable: false,
+    auditClassification: "export", run: clickCmd("btn-export-pdf"),
+  },
+  {
+    id: "export.markdown", name: "Export Markdown", description: "Download as Markdown (loss report shown if lossy)",
+    isPermitted: () => true, isAvailable: () => true, undoable: false,
+    auditClassification: "export", run: clickCmd("btn-export-md"),
+  },
+  {
+    id: "export.html", name: "Export HTML", description: "Download as HTML",
+    isPermitted: () => true, isAvailable: () => true, undoable: false,
+    auditClassification: "export", run: clickCmd("btn-export-html"),
+  },
+  {
+    id: "export.json", name: "Export JSON", description: "Download the native document model",
+    isPermitted: () => true, isAvailable: () => true, undoable: false,
+    auditClassification: "export", run: clickCmd("btn-export-json"),
+  },
+];
+
+const paletteEl = document.getElementById("palette") as HTMLElement | null;
+const palInput = document.getElementById("pal-input") as HTMLInputElement | null;
+const palList = document.getElementById("pal-list") as HTMLElement | null;
+let palIndex = 0;
+
+function paletteMatches(): CommandDefinition[] {
+  const q = (palInput?.value ?? "").trim().toLowerCase();
+  return COMMANDS.filter(
+    (c) =>
+      c.isPermitted(null) &&
+      c.isAvailable(null) &&
+      (q === "" || c.name.toLowerCase().includes(q) || c.id.includes(q))
+  );
+}
+
+function renderPalette(): void {
+  if (!palList) return;
+  const matches = paletteMatches();
+  palIndex = Math.max(0, Math.min(palIndex, matches.length - 1));
+  palList.innerHTML = matches
+    .map(
+      (c, i) =>
+        `<div class="pal-item${i === palIndex ? " active" : ""}" data-i="${i}">` +
+        `<span class="pal-name">${c.name}</span>` +
+        `<span class="pal-desc">${c.description}</span>` +
+        (c.shortcut ? `<span class="pal-key">${c.shortcut}</span>` : "") +
+        `</div>`
+    )
+    .join("") || `<div class="pal-empty">No matching commands</div>`;
+  palList.querySelectorAll<HTMLElement>(".pal-item").forEach((item) => {
+    item.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      runPaletteCommand(Number(item.dataset.i));
+    });
+  });
+}
+
+function openPalette(): void {
+  if (!paletteEl || !palInput) return;
+  readSelection();
+  paletteEl.hidden = false;
+  palInput.value = "";
+  palIndex = 0;
+  renderPalette();
+  palInput.focus();
+}
+
+function closePalette(): void {
+  if (!paletteEl) return;
+  paletteEl.hidden = true;
+  editor.focus();
+  writeSelection();
+}
+
+function runPaletteCommand(index: number): void {
+  const cmd = paletteMatches()[index];
+  closePalette();
+  if (cmd) {
+    cmd.run(null, undefined);
+    statusEl.textContent = `Ran: ${cmd.name}`;
+  }
+}
+
+palInput?.addEventListener("input", () => {
+  palIndex = 0;
+  renderPalette();
+});
+palInput?.addEventListener("keydown", (e) => {
+  e.stopPropagation();
+  if (e.key === "Escape") closePalette();
+  else if (e.key === "ArrowDown") { palIndex++; renderPalette(); e.preventDefault(); }
+  else if (e.key === "ArrowUp") { palIndex--; renderPalette(); e.preventDefault(); }
+  else if (e.key === "Enter") { e.preventDefault(); runPaletteCommand(palIndex); }
+});
+paletteEl?.addEventListener("mousedown", (e) => {
+  if (e.target === paletteEl) closePalette();
+});
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    if (paletteEl?.hidden) openPalette();
+    else closePalette();
+  }
+});
 
 // ---------- boot ----------
 async function boot(): Promise<void> {

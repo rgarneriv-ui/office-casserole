@@ -121,7 +121,7 @@ files saved by actual Office applications are the ones that matter most.
 
 1. Grow the fixture corpus with real Word/Excel/PowerPoint files; add PPTX
    import; Original Format Preservation store (§5.1).
-2. Reveal Codes in-panel code editing (§6.2.3); inline rich text editing in
-   Slides; proportional-font PDF output (ADR-0006 path).
-3. Lift command sets into the `CommandDefinition` registry + command palette.
-4. Collaboration/versioning layer (Phase 4) once the engines above stabilize.
+2. Proportional-font PDF output (ADR-0006 path); full command-registry
+   inversion (controls calling the registry); palettes for Sheets/Slides.
+3. Collaboration/versioning layer (Phase 4): operation logs replacing
+   snapshot undo (ADR-0001/0003 migration), then multi-user semantics.
