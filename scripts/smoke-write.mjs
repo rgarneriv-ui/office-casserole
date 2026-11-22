@@ -1,19 +1,54 @@
+// jsdom boot smoke test for the built Write app (dist/index.standalone.html).
+// jsdom has no IndexedDB, so this also exercises the localStorage fallback and
+// the v1 → v2 legacy-journal migration.
 import { readFile } from "node:fs/promises";
 import { JSDOM } from "jsdom";
 
 const html = await readFile("apps/write/dist/index.standalone.html", "utf8");
-const dom = new JSDOM(html, { runScripts: "dangerously", pretendToBeVisual: true, url: "https://example.test/" });
-await new Promise(r => setTimeout(r, 200));
-const doc = dom.window.document;
-const editor = doc.getElementById("editor");
-const codes = doc.getElementById("codes");
 const assert = (cond, msg) => { if (!cond) { console.error("SMOKE FAIL:", msg); process.exit(1); } };
 
-assert(editor, "editor element exists");
-assert(editor.querySelectorAll("[data-block]").length === 2, "seed doc renders 2 blocks, got " + editor.querySelectorAll("[data-block]").length);
-assert(editor.textContent.includes("Casserole Write"), "seed heading rendered");
-assert(codes.querySelectorAll(".code").length > 5, "codes panel populated: " + codes.querySelectorAll(".code").length);
-assert(codes.textContent.includes("[Heading 1]"), "block code present");
-assert(codes.textContent.includes("[Bold On]"), "mark code present");
-assert(dom.window.localStorage.getItem("casserole-write:v1:default-doc") === null, "no premature save before edit");
-console.log("SMOKE OK — blocks:", editor.querySelectorAll("[data-block]").length, "codes:", codes.querySelectorAll(".code").length);
+async function bootDom(prepare) {
+  const dom = new JSDOM("<!DOCTYPE html><html><body></body></html>", {
+    runScripts: "dangerously", pretendToBeVisual: true, url: "https://example.test/",
+  });
+  if (prepare) prepare(dom);
+  dom.window.document.open();
+  dom.window.document.write(html);
+  dom.window.document.close();
+  await new Promise(r => setTimeout(r, 300));
+  return dom;
+}
+
+// Scenario 1: fresh boot → seed document, saved durably, files list populated
+{
+  const dom = await bootDom();
+  const doc = dom.window.document;
+  const editor = doc.getElementById("editor");
+  const codes = doc.getElementById("codes");
+  assert(editor.querySelectorAll("[data-block]").length === 2, "seed doc renders 2 blocks");
+  assert(editor.textContent.includes("Casserole Write"), "seed heading rendered");
+  assert(codes.querySelectorAll(".code").length > 5, "codes panel populated");
+  assert(codes.textContent.includes("[Heading 1]"), "block code present");
+  assert(codes.textContent.includes("[Bold On]"), "mark code present");
+  assert(doc.getElementById("doc-title").value === "Welcome to Casserole Write", "title set");
+  assert(doc.getElementById("doc-list").options.length === 1, "files list has the seed doc");
+  const index = JSON.parse(dom.window.localStorage.getItem("casserole-write:v2:index") ?? "[]");
+  assert(index.length === 1, "seed doc persisted to fallback store");
+}
+
+// Scenario 2: legacy v1 journal migrates into the new store
+{
+  const legacy = {
+    savedAt: "2026-11-20T10:00:00.000Z",
+    doc: { schemaVersion: "1.0", blocks: [{ id: "L1", type: "paragraph", runs: [{ text: "legacy words", marks: [] }] }] },
+  };
+  const dom = await bootDom((d) =>
+    d.window.localStorage.setItem("casserole-write:v1:default-doc", JSON.stringify(legacy))
+  );
+  const doc = dom.window.document;
+  assert(doc.getElementById("editor").textContent.includes("legacy words"), "migrated doc opened");
+  assert(doc.getElementById("doc-title").value === "Recovered document", "migration title");
+  assert(dom.window.localStorage.getItem("casserole-write:v1:default-doc") === null, "legacy journal retired after successful migration");
+}
+
+console.log("SMOKE OK — fresh boot + legacy migration");

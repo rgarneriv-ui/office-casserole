@@ -35,7 +35,8 @@ import {
   validateModel,
 } from "../../../engines/document-model/src/index";
 
-const STORAGE_KEY = "casserole-write:v1:default-doc";
+import { DocumentStore, StoredDocMeta, newDocId, openBestStore } from "./store";
+
 const BLOCK_TAG: Record<string, string> = { paragraph: "p", heading1: "h1", heading2: "h2" };
 
 // ---------- state ----------
@@ -50,37 +51,45 @@ const editor = document.getElementById("editor") as HTMLElement;
 const codesPanel = document.getElementById("codes") as HTMLElement;
 const statusEl = document.getElementById("status") as HTMLElement;
 const explainEl = document.getElementById("explain") as HTMLElement;
+const titleEl = document.getElementById("doc-title") as HTMLInputElement | null;
+const docListEl = document.getElementById("doc-list") as HTMLSelectElement | null;
 
-// ---------- persistence (autosave + crash recovery) ----------
-function save(): void {
+// ---------- persistence (multi-document store, autosave + crash recovery) ----------
+let store: DocumentStore | null = null;
+let currentDocId = "";
+let currentTitle = "Untitled document";
+let dirtySinceSave = false;
+
+function durabilityNote(): string {
+  if (!store) return "";
+  if (store.durability === "memory-only") return " (⚠ memory only — export to keep)";
+  if (store.durability === "session") return " (localStorage)";
+  return "";
+}
+
+async function save(): Promise<void> {
+  if (!store) return;
   try {
-    const payload = { savedAt: new Date().toISOString(), doc: JSON.parse(toJSON(model)) };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(payload));
-    statusEl.textContent = `Saved ${new Date().toLocaleTimeString()}`;
-  } catch (e) {
-    statusEl.textContent = "Autosave unavailable in this context";
+    currentTitle = (titleEl?.value || "Untitled document").trim() || "Untitled document";
+    await store.save({
+      id: currentDocId,
+      title: currentTitle,
+      updatedAt: new Date().toISOString(),
+      doc: JSON.parse(toJSON(model)),
+    });
+    dirtySinceSave = false;
+    statusEl.textContent = `Saved ${new Date().toLocaleTimeString()}${durabilityNote()}`;
+    void refreshDocList();
+  } catch {
+    statusEl.textContent = "⚠ Autosave failed — export to keep this document";
   }
 }
 
 function scheduleSave(): void {
+  dirtySinceSave = true;
   statusEl.textContent = "Editing…";
   if (saveTimer !== null) window.clearTimeout(saveTimer);
-  saveTimer = window.setTimeout(save, 500);
-}
-
-function restore(): void {
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return;
-    const payload = JSON.parse(raw) as { savedAt: string; doc: unknown };
-    model = fromJSON(JSON.stringify(payload.doc));
-    recovered = true;
-    statusEl.textContent = `Recovered document saved ${new Date(payload.savedAt).toLocaleString()}`;
-  } catch {
-    // Corrupt or incompatible journal: start fresh but do not overwrite it
-    // until the first successful user edit (spec §1.2.5 recoverability).
-    statusEl.textContent = "Stored document could not be read; started a new document";
-  }
+  saveTimer = window.setTimeout(() => void save(), 500);
 }
 
 // ---------- selection mapping (DOM <-> model) ----------
@@ -489,20 +498,69 @@ document.getElementById("btn-export-html")?.addEventListener("click", () => {
 document.getElementById("btn-export-json")?.addEventListener("click", () => {
   download("document.json", "application/json", toJSON(model));
 });
-document.getElementById("btn-new")?.addEventListener("click", () => {
-  if (!window.confirm("Start a new document? The current one stays in autosave until you edit.")) return;
-  history.checkpoint(model);
-  model = newDocument();
+// ---------- files surface (multi-document) ----------
+async function refreshDocList(): Promise<void> {
+  if (!store || !docListEl) return;
+  const metas = await store.list();
+  docListEl.innerHTML = metas
+    .map(
+      (m) =>
+        `<option value="${m.id}"${m.id === currentDocId ? " selected" : ""}>${m.title
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")}</option>`
+    )
+    .join("");
+}
+
+function resetEditorState(newModel: DocModel, title: string, id: string): void {
+  model = newModel;
+  currentDocId = id;
+  currentTitle = title;
+  if (titleEl) titleEl.value = title;
   selection = { anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 0 } };
+  caretMarks = null;
   render();
-  scheduleSave();
+}
+
+async function openDoc(id: string): Promise<void> {
+  if (!store) return;
+  if (dirtySinceSave) await save();
+  const stored = await store.load(id);
+  if (!stored) {
+    statusEl.textContent = "Document not found";
+    return;
+  }
+  try {
+    resetEditorState(fromJSON(JSON.stringify(stored.doc)), stored.title, stored.id);
+    statusEl.textContent = `Opened — last saved ${new Date(stored.updatedAt).toLocaleString()}`;
+  } catch {
+    statusEl.textContent = "⚠ Stored document could not be read (left untouched)";
+  }
+  await refreshDocList();
+}
+
+async function createDoc(seed?: DocModel, title = "Untitled document"): Promise<void> {
+  if (!store) return;
+  if (dirtySinceSave) await save();
+  resetEditorState(seed ?? newDocument(), title, newDocId());
+  await save();
+}
+
+docListEl?.addEventListener("change", () => void openDoc(docListEl.value));
+titleEl?.addEventListener("change", () => scheduleSave());
+document.getElementById("btn-new")?.addEventListener("click", () => void createDoc());
+document.getElementById("btn-delete")?.addEventListener("click", async () => {
+  if (!store) return;
+  if (!window.confirm(`Delete "${currentTitle}"? This cannot be undone.`)) return;
+  await store.remove(currentDocId);
+  const metas = await store.list();
+  if (metas.length > 0) await openDoc(metas[0]!.id);
+  else await createDoc();
 });
 
-// ---------- boot ----------
-restore();
-if (!recovered) {
+function seedModel(): DocModel {
   // Seed content so the inspector has something to show on first run.
-  model = fromJSON(
+  return fromJSON(
     JSON.stringify({
       schemaVersion: "1.0",
       blocks: [
@@ -515,12 +573,36 @@ if (!recovered) {
             { text: "working", marks: ["bold"] },
             { text: " vertical slice: a typed document model, command-dispatched editing, ", marks: [] },
             { text: "undo/redo", marks: ["italic"] },
-            { text: ", autosave with crash recovery, and a Reveal Codes panel on the right. Try Ctrl/Cmd-B, Enter, and the export buttons.", marks: [] },
+            { text: ", durable autosave with crash recovery, multiple documents, and a Reveal Codes panel on the right. Try Ctrl/Cmd-B, Enter, and the export buttons.", marks: [] },
           ],
         },
       ],
     })
   );
 }
-render();
+
+// ---------- boot ----------
+async function boot(): Promise<void> {
+  render(); // paint immediately; storage attaches when ready
+  try {
+    store = await openBestStore();
+  } catch {
+    store = null;
+  }
+  if (!store) {
+    statusEl.textContent = "⚠ No storage available — export to keep your work";
+    return;
+  }
+  const metas = await store.list();
+  if (metas.length > 0) {
+    await openDoc(metas[0]!.id);
+  } else {
+    await createDoc(seedModel(), "Welcome to Casserole Write");
+  }
+  if (store.durability !== "durable") {
+    statusEl.textContent = `Storage degraded: ${store.kind}${durabilityNote()}`;
+  }
+}
+
+void boot();
 editor.focus();

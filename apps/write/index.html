@@ -16,6 +16,10 @@
            background: var(--panel); border-bottom: 1px solid var(--line); flex-wrap: wrap; }
   header .logo { font-weight: 700; letter-spacing: .02em; }
   header .logo em { color: var(--accent); font-style: normal; }
+  #doc-title { font: inherit; font-size: 13px; padding: 5px 8px; border: 1px solid transparent;
+               border-radius: 6px; background: transparent; min-width: 160px; color: var(--ink); }
+  #doc-title:hover, #doc-title:focus { border-color: var(--line); background: #faf8f3; outline: none; }
+  #doc-list { max-width: 170px; }
   .tools { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   button, select { font: inherit; font-size: 13px; padding: 5px 10px; border: 1px solid var(--line);
            background: #faf8f3; border-radius: 6px; cursor: pointer; color: var(--ink); }
@@ -52,6 +56,8 @@
 <body>
   <header>
     <span class="logo">Casserole <em>Write</em></span>
+    <input id="doc-title" type="text" value="Untitled document" title="Document title" />
+    <select id="doc-list" title="Your documents"></select>
     <div class="tools">
       <button id="btn-undo" title="Undo (Ctrl/Cmd-Z)">↶</button>
       <button id="btn-redo" title="Redo (Ctrl/Cmd-Y)">↷</button>
@@ -67,6 +73,7 @@
       <button id="btn-export-html" title="Export HTML">↓ HTML</button>
       <button id="btn-export-json" title="Export native JSON">↓ JSON</button>
       <button id="btn-new" title="New document">New</button>
+      <button id="btn-delete" title="Delete this document">🗑</button>
     </div>
     <span class="spacer"></span>
     <span id="status">Ready</span>
