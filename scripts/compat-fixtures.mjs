@@ -16,6 +16,8 @@ import { JSDOM } from "jsdom";
 const parseXml = (xml) => new (new JSDOM("").window.DOMParser)().parseFromString(xml, "application/xml");
 
 const { importDocx } = await import("../build/engines/format-conversion/src/docx.js");
+const { importPptx } = await import("../build/engines/format-conversion/src/pptx.js");
+const { validateDeck } = await import("../build/engines/presentation-model/src/model.js");
 const { importXlsx } = await import("../build/engines/format-conversion/src/xlsx.js");
 const { validateModel, docText } = await import("../build/engines/document-model/src/model.js");
 
@@ -80,6 +82,28 @@ for (const name of await listFixtures("tests/fixtures/xlsx")) {
   }
 }
 
-console.log(summary.join("\n") || "No fixtures found — add real Office files under tests/fixtures/{docx,xlsx}/");
+for (const name of await listFixtures("tests/fixtures/pptx")) {
+  total++;
+  const path = `tests/fixtures/pptx/${name}`;
+  try {
+    const bytes = new Uint8Array(await readFile(path));
+    const { deck, report } = await importPptx(bytes, parseXml);
+    const errors = validateDeck(deck);
+    if (errors.length > 0) throw new Error(`invalid deck: ${errors.join("; ")}`);
+    const out = {
+      fixture: name, format: "pptx", ok: true,
+      slides: deck.slides.length,
+      elements: deck.slides.reduce((n, s2) => n + s2.elements.length, 0),
+      lossless: report.lossless, warnings: report.warnings,
+    };
+    await writeFile(`tests/fixtures/reports/${name}.report.json`, JSON.stringify(out, null, 2) + "\n");
+    summary.push(`OK   pptx ${name} — ${out.slides} slides, ${out.elements} elements, ${report.warnings.length} warning(s)`);
+  } catch (err) {
+    failures++;
+    summary.push(`FAIL pptx ${name} — ${err.message}`);
+  }
+}
+
+console.log(summary.join("\n") || "No fixtures found — add real Office files under tests/fixtures/{docx,xlsx,pptx}/");
 console.log(`\n${total - failures}/${total} fixtures imported cleanly`);
 if (failures > 0) process.exit(1);

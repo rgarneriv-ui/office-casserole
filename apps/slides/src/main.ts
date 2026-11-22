@@ -25,7 +25,7 @@ import {
   validateDeck,
 } from "../../../engines/presentation-model/src/model";
 import { History } from "../../../engines/document-model/src/history";
-import { exportPptx } from "../../../engines/format-conversion/src/pptx";
+import { exportPptx, importPptx } from "../../../engines/format-conversion/src/pptx";
 
 const STORAGE_KEY = "casserole-slides:v1:default";
 
@@ -446,6 +446,45 @@ async function deliverBlob(filename: string, blob: Blob): Promise<void> {
 document.getElementById("btn-export-json")?.addEventListener("click", () =>
   deliverBlob("deck.json", new Blob([deckToJSON(deck)], { type: "application/json" }))
 );
+document.getElementById("btn-open")?.addEventListener("click", () => {
+  (document.getElementById("file-open") as HTMLInputElement | null)?.click();
+});
+document.getElementById("file-open")?.addEventListener("change", async (e) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  try {
+    if (file.name.toLowerCase().endsWith(".json")) {
+      history.checkpoint(deck);
+      deck = deckFromJSON(await file.text());
+      current = 0;
+      selectedId = null;
+      render();
+      scheduleSave();
+      statusEl.textContent = "Imported JSON deck";
+      return;
+    }
+    const { deck: imported, report } = await importPptx(new Uint8Array(await file.arrayBuffer()));
+    history.checkpoint(deck);
+    deck = imported;
+    current = 0;
+    selectedId = null;
+    render();
+    scheduleSave();
+    if (report.lossless) {
+      statusEl.textContent = "Imported PPTX — no loss detected for this deck";
+    } else {
+      statusEl.textContent = `Imported PPTX with ${report.warnings.length} note(s)`;
+      window.alert(
+        "Import loss report:\n\n" + [...new Set(report.warnings.map((w) => `• ${w.message}`))].join("\n")
+      );
+    }
+  } catch (err) {
+    statusEl.textContent = `⚠ Import failed: ${err instanceof Error ? err.message : String(err)}`;
+  }
+});
+
 document.getElementById("btn-export-pptx")?.addEventListener("click", async () => {
   try {
     const { bytes } = await exportPptx(deck);

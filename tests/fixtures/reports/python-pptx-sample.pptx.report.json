@@ -1,0 +1,9 @@
+{
+  "fixture": "python-pptx-sample.pptx",
+  "format": "pptx",
+  "ok": true,
+  "slides": 2,
+  "elements": 2,
+  "lossless": true,
+  "warnings": []
+}

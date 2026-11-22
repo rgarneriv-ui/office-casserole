@@ -64,6 +64,8 @@
     <button id="btn-undo" title="Undo (Ctrl/Cmd-Z)">↶</button>
     <button id="btn-redo" title="Redo (Ctrl/Cmd-Y)">↷</button>
     <button id="btn-present" title="Present (Esc to exit)">▶ Present</button>
+    <button id="btn-open" title="Open a .pptx or .json deck">Open…</button>
+    <input id="file-open" type="file" accept=".pptx,.json" style="display:none" />
     <button id="btn-export-pptx" title="Export PowerPoint (.pptx)">↓ PPTX</button>
     <button id="btn-export-json" title="Export native JSON">↓ JSON</button>
     <span class="spacer"></span>
@@ -268,6 +270,12 @@
     if (typeof CompressionStream === "undefined") return null;
     return pipeThrough(data, new CompressionStream("deflate-raw"));
   }
+  async function inflateRaw(data) {
+    if (typeof DecompressionStream === "undefined") {
+      throw new Error("Cannot read compressed ZIP entries: DecompressionStream unavailable");
+    }
+    return pipeThrough(data, new DecompressionStream("deflate-raw"));
+  }
   var textEncoder = new TextEncoder();
   async function zipWrite(entries) {
     const prepared = [];
@@ -339,6 +347,53 @@
     return out;
   }
   var textDecoder = new TextDecoder();
+  async function zipRead(bytes) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    let eocd = -1;
+    const scanFloor = Math.max(0, bytes.length - 65558);
+    for (let i = bytes.length - 22; i >= scanFloor; i--) {
+      if (view.getUint32(i, true) === 101010256) {
+        eocd = i;
+        break;
+      }
+    }
+    if (eocd < 0) throw new Error("Not a ZIP archive (no end-of-central-directory record)");
+    const count = view.getUint16(eocd + 10, true);
+    const cdOffset = view.getUint32(eocd + 16, true);
+    const entries = [];
+    let p = cdOffset;
+    for (let i = 0; i < count; i++) {
+      if (view.getUint32(p, true) !== 33639248) {
+        throw new Error("Corrupt ZIP: bad central-directory signature");
+      }
+      const method = view.getUint16(p + 10, true);
+      const crc = view.getUint32(p + 16, true);
+      const compSize = view.getUint32(p + 20, true);
+      const uncompSize = view.getUint32(p + 24, true);
+      const nameLen = view.getUint16(p + 28, true);
+      const extraLen = view.getUint16(p + 30, true);
+      const commentLen = view.getUint16(p + 32, true);
+      const localOffset = view.getUint32(p + 42, true);
+      const name = textDecoder.decode(bytes.subarray(p + 46, p + 46 + nameLen));
+      p += 46 + nameLen + extraLen + commentLen;
+      const lNameLen = view.getUint16(localOffset + 26, true);
+      const lExtraLen = view.getUint16(localOffset + 28, true);
+      const dataStart = localOffset + 30 + lNameLen + lExtraLen;
+      const raw = bytes.subarray(dataStart, dataStart + compSize);
+      let data;
+      if (method === 0) data = new Uint8Array(raw);
+      else if (method === 8) data = await inflateRaw(new Uint8Array(raw));
+      else throw new Error(`Unsupported ZIP compression method ${method} for ${name}`);
+      if (data.length !== uncompSize) {
+        throw new Error(`Corrupt ZIP entry ${name}: size mismatch`);
+      }
+      if (crc32(data) !== crc) {
+        throw new Error(`Corrupt ZIP entry ${name}: CRC mismatch`);
+      }
+      entries.push({ name, data });
+    }
+    return entries;
+  }
 
   // engines/format-conversion/src/pptx.ts
   var textEncoder2 = new TextEncoder();
@@ -452,6 +507,200 @@
         warnings: []
       }
     };
+  }
+  var textDecoder2 = new TextDecoder();
+  function defaultParse(xml) {
+    if (typeof DOMParser === "undefined") {
+      throw new Error("No XML parser available: pass parseXml to importPptx");
+    }
+    return new DOMParser().parseFromString(xml, "application/xml");
+  }
+  function kids(el, name) {
+    const out = [];
+    const children = el.children ?? [];
+    for (let i = 0; i < children.length; i++) {
+      if (children[i].localName === name) out.push(children[i]);
+    }
+    return out;
+  }
+  function kid(el, name) {
+    return kids(el, name)[0] ?? null;
+  }
+  function deep(el, name) {
+    const out = [];
+    const walk = (e) => {
+      const children = e.children ?? [];
+      for (let i = 0; i < children.length; i++) {
+        const c = children[i];
+        if (c.localName === name) out.push(c);
+        walk(c);
+      }
+    };
+    walk(el);
+    return out;
+  }
+  function importShape(sp, scale, warnings, slideIndex, fallbackSlot) {
+    const spPr = kid(sp, "spPr");
+    const xfrm = spPr ? kid(spPr, "xfrm") : null;
+    let x, y, w, h;
+    if (xfrm) {
+      const off = kid(xfrm, "off");
+      const ext = kid(xfrm, "ext");
+      x = Number(off?.getAttribute("x") ?? 0) * scale.x;
+      y = Number(off?.getAttribute("y") ?? 0) * scale.y;
+      w = Number(ext?.getAttribute("cx") ?? 0) * scale.x;
+      h = Number(ext?.getAttribute("cy") ?? 0) * scale.y;
+    } else {
+      warnings.push({
+        code: "PPTX-IMPORT-NO-GEOMETRY",
+        message: `Slide ${slideIndex + 1}: a placeholder had no explicit position (layout inheritance not yet resolved); default position used.`,
+        blockIndex: slideIndex
+      });
+      x = 120;
+      y = 100 + fallbackSlot.n * 180;
+      w = CANVAS_W - 240;
+      h = 160;
+      fallbackSlot.n++;
+    }
+    const txBody = kid(sp, "txBody");
+    const paragraphs = txBody ? kids(txBody, "p") : [];
+    const textLines = paragraphs.map(
+      (p) => deep(p, "t").map((t) => t.textContent ?? "").join("")
+    );
+    const hasText = textLines.some((l) => l.length > 0);
+    if (!hasText) {
+      const fillClr = spPr ? deep(spPr, "srgbClr")[0] : null;
+      const fill = fillClr ? `#${(fillClr.getAttribute("val") ?? "DBE7F0").toLowerCase()}` : void 0;
+      const el2 = { id: newElemId(), kind: "rect", x, y, w, h, fill };
+      clampElement(el2);
+      return el2;
+    }
+    const firstPPr = paragraphs.map((p) => kid(p, "pPr")).find((p) => p) ?? null;
+    const algnAttr = firstPPr?.getAttribute("algn") ?? null;
+    const align = algnAttr === "ctr" ? "center" : algnAttr === "r" ? "right" : "left";
+    const firstRPr = deep(txBody, "rPr")[0] ?? null;
+    const szAttr = firstRPr?.getAttribute("sz");
+    const size = szAttr ? Math.max(12, Math.round(Number(szAttr) / 100 / PT_PER_UNIT)) : 36;
+    const bold = firstRPr?.getAttribute("b") === "1";
+    const clr = firstRPr ? deep(firstRPr, "srgbClr")[0] : null;
+    const color = clr ? `#${(clr.getAttribute("val") ?? "222222").toLowerCase()}` : "#222222";
+    const rPrs = deep(txBody, "rPr");
+    if (rPrs.length > 1) {
+      const uniform = rPrs.every(
+        (r) => (r.getAttribute("sz") ?? "") === (rPrs[0].getAttribute("sz") ?? "") && (r.getAttribute("b") ?? "") === (rPrs[0].getAttribute("b") ?? "")
+      );
+      if (!uniform) {
+        warnings.push({
+          code: "PPTX-IMPORT-MIXED-RUNS",
+          message: `Slide ${slideIndex + 1}: mixed per-run formatting flattened to the first run's style (per-run styling not yet in the model).`,
+          blockIndex: slideIndex
+        });
+      }
+    }
+    const el = {
+      id: newElemId(),
+      kind: "text",
+      x,
+      y,
+      w,
+      h,
+      text: textLines.join("\n"),
+      size,
+      bold,
+      align,
+      color
+    };
+    clampElement(el);
+    return el;
+  }
+  async function importPptx(bytes, parseXml = defaultParse) {
+    const warnings = [];
+    const entries = await zipRead(bytes);
+    const byName = new Map(entries.map((e) => [e.name, e]));
+    const presEntry = byName.get("ppt/presentation.xml");
+    if (!presEntry) throw new Error("Not a PPTX package: ppt/presentation.xml missing");
+    const pres = parseXml(textDecoder2.decode(presEntry.data));
+    const sldSz = deep(pres, "sldSz")[0];
+    const cx = Number(sldSz?.getAttribute("cx") ?? SLIDE_CX);
+    const cy = Number(sldSz?.getAttribute("cy") ?? SLIDE_CY);
+    const scale = { x: CANVAS_W / cx, y: CANVAS_H / cy };
+    if (Math.abs(cx / cy - 16 / 9) > 0.02) {
+      warnings.push({
+        code: "PPTX-IMPORT-ASPECT",
+        message: `Source slides are ${cx}\xD7${cy} EMU (not 16:9); geometry was scaled per axis to fit the 16:9 canvas.`,
+        blockIndex: -1
+      });
+    }
+    const relsEntry = byName.get("ppt/_rels/presentation.xml.rels");
+    const relTargets = /* @__PURE__ */ new Map();
+    if (relsEntry) {
+      const relsDom = parseXml(textDecoder2.decode(relsEntry.data));
+      for (const rel of deep(relsDom, "Relationship")) {
+        relTargets.set(rel.getAttribute("Id") ?? "", rel.getAttribute("Target") ?? "");
+      }
+    }
+    const slideParts = [];
+    for (const sldId of deep(pres, "sldId")) {
+      const rId = sldId.getAttributeNS?.("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id") ?? sldId.getAttribute("r:id") ?? "";
+      const target = relTargets.get(rId);
+      if (target) slideParts.push("ppt/" + target.replace(/^\.\//, ""));
+    }
+    if (slideParts.length === 0) {
+      for (const name of [...byName.keys()].sort()) {
+        if (/^ppt\/slides\/slide\d+\.xml$/.test(name)) slideParts.push(name);
+      }
+    }
+    if (slideParts.length === 0) throw new Error("PPTX package has no slides");
+    const deck2 = { schemaVersion: DECK_SCHEMA_VERSION, slides: [] };
+    slideParts.forEach((part, si) => {
+      const entry = byName.get(part);
+      const slide = { id: newElemId(), elements: [] };
+      if (!entry) {
+        warnings.push({
+          code: "PPTX-IMPORT-MISSING-PART",
+          message: `Slide part ${part} is referenced but missing; imported as an empty slide.`,
+          blockIndex: si
+        });
+        deck2.slides.push(slide);
+        return;
+      }
+      const dom = parseXml(textDecoder2.decode(entry.data));
+      const spTree = deep(dom, "spTree")[0];
+      if (!spTree) {
+        deck2.slides.push(slide);
+        return;
+      }
+      const fallbackSlot = { n: 0 };
+      for (let i = 0; i < spTree.children.length; i++) {
+        const child = spTree.children[i];
+        if (child.localName === "sp") {
+          const el = importShape(child, scale, warnings, si, fallbackSlot);
+          if (el) slide.elements.push(el);
+        } else if (child.localName === "pic") {
+          warnings.push({
+            code: "PPTX-IMPORT-PICTURE",
+            message: `Slide ${si + 1}: a picture was skipped (images not yet in the model).`,
+            blockIndex: si
+          });
+        } else if (child.localName === "graphicFrame") {
+          warnings.push({
+            code: "PPTX-IMPORT-GRAPHIC",
+            message: `Slide ${si + 1}: a table/chart/diagram frame was skipped.`,
+            blockIndex: si
+          });
+        } else if (child.localName === "grpSp") {
+          warnings.push({
+            code: "PPTX-IMPORT-GROUP",
+            message: `Slide ${si + 1}: a grouped shape was skipped (group transforms not yet supported).`,
+            blockIndex: si
+          });
+        }
+      }
+      deck2.slides.push(slide);
+    });
+    const errors = validateDeck(deck2);
+    if (errors.length > 0) throw new Error(`PPTX import produced invalid deck: ${errors.join("; ")}`);
+    return { deck: deck2, report: { format: "pptx", lossless: warnings.length === 0, warnings } };
   }
 
   // apps/slides/src/main.ts
@@ -812,6 +1061,44 @@
     "click",
     () => deliverBlob("deck.json", new Blob([deckToJSON(deck)], { type: "application/json" }))
   );
+  document.getElementById("btn-open")?.addEventListener("click", () => {
+    document.getElementById("file-open")?.click();
+  });
+  document.getElementById("file-open")?.addEventListener("change", async (e) => {
+    const input = e.target;
+    const file = input.files?.[0];
+    input.value = "";
+    if (!file) return;
+    try {
+      if (file.name.toLowerCase().endsWith(".json")) {
+        history.checkpoint(deck);
+        deck = deckFromJSON(await file.text());
+        current = 0;
+        selectedId = null;
+        render();
+        scheduleSave();
+        statusEl.textContent = "Imported JSON deck";
+        return;
+      }
+      const { deck: imported, report } = await importPptx(new Uint8Array(await file.arrayBuffer()));
+      history.checkpoint(deck);
+      deck = imported;
+      current = 0;
+      selectedId = null;
+      render();
+      scheduleSave();
+      if (report.lossless) {
+        statusEl.textContent = "Imported PPTX \u2014 no loss detected for this deck";
+      } else {
+        statusEl.textContent = `Imported PPTX with ${report.warnings.length} note(s)`;
+        window.alert(
+          "Import loss report:\n\n" + [...new Set(report.warnings.map((w) => `\u2022 ${w.message}`))].join("\n")
+        );
+      }
+    } catch (err) {
+      statusEl.textContent = `\u26A0 Import failed: ${err instanceof Error ? err.message : String(err)}`;
+    }
+  });
   document.getElementById("btn-export-pptx")?.addEventListener("click", async () => {
     try {
       const { bytes } = await exportPptx(deck);

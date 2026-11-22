@@ -7,9 +7,19 @@
  * and font sizes convert at 0.6 pt per logical unit (540pt slide height).
  */
 
-import { DeckModel, Slide, SlideElement } from "../../presentation-model/src/model";
-import { LossReport } from "../../document-model/src/serialize";
-import { ZipEntry, zipWrite } from "./zip";
+import {
+  CANVAS_H,
+  CANVAS_W,
+  DeckModel,
+  Slide,
+  SlideElement,
+  DECK_SCHEMA_VERSION,
+  clampElement,
+  newElemId,
+  validateDeck,
+} from "../../presentation-model/src/model";
+import { LossReport, LossWarning } from "../../document-model/src/serialize";
+import { ZipEntry, zipRead, zipWrite } from "./zip";
 
 const textEncoder = new TextEncoder();
 
@@ -230,4 +240,243 @@ export async function exportPptx(deck: DeckModel): Promise<{ bytes: Uint8Array; 
       warnings: [],
     },
   };
+}
+
+// ---------- import ----------
+
+export type XmlParse = (xml: string) => Document;
+
+const textDecoder = new TextDecoder();
+
+function defaultParse(xml: string): Document {
+  if (typeof DOMParser === "undefined") {
+    throw new Error("No XML parser available: pass parseXml to importPptx");
+  }
+  return new DOMParser().parseFromString(xml, "application/xml");
+}
+
+function kids(el: Element | Document, name: string): Element[] {
+  const out: Element[] = [];
+  const children = (el as Element).children ?? [];
+  for (let i = 0; i < children.length; i++) {
+    if (children[i]!.localName === name) out.push(children[i]!);
+  }
+  return out;
+}
+
+function kid(el: Element, name: string): Element | null {
+  return kids(el, name)[0] ?? null;
+}
+
+function deep(el: Element | Document, name: string): Element[] {
+  const out: Element[] = [];
+  const walk = (e: Element | Document) => {
+    const children = (e as Element).children ?? [];
+    for (let i = 0; i < children.length; i++) {
+      const c = children[i]!;
+      if (c.localName === name) out.push(c);
+      walk(c);
+    }
+  };
+  walk(el);
+  return out;
+}
+
+interface SlideScale {
+  x: number; // logical units per EMU
+  y: number;
+}
+
+function importShape(
+  sp: Element,
+  scale: SlideScale,
+  warnings: LossWarning[],
+  slideIndex: number,
+  fallbackSlot: { n: number }
+): SlideElement | null {
+  const spPr = kid(sp, "spPr");
+  const xfrm = spPr ? kid(spPr, "xfrm") : null;
+  let x: number, y: number, w: number, h: number;
+  if (xfrm) {
+    const off = kid(xfrm, "off");
+    const ext = kid(xfrm, "ext");
+    x = Number(off?.getAttribute("x") ?? 0) * scale.x;
+    y = Number(off?.getAttribute("y") ?? 0) * scale.y;
+    w = Number(ext?.getAttribute("cx") ?? 0) * scale.x;
+    h = Number(ext?.getAttribute("cy") ?? 0) * scale.y;
+  } else {
+    // placeholder inheriting geometry from its layout — we do not resolve
+    // layouts yet, so stack with defaults and say so.
+    warnings.push({
+      code: "PPTX-IMPORT-NO-GEOMETRY",
+      message: `Slide ${slideIndex + 1}: a placeholder had no explicit position (layout inheritance not yet resolved); default position used.`,
+      blockIndex: slideIndex,
+    });
+    x = 120;
+    y = 100 + fallbackSlot.n * 180;
+    w = CANVAS_W - 240;
+    h = 160;
+    fallbackSlot.n++;
+  }
+
+  const txBody = kid(sp, "txBody");
+  const paragraphs = txBody ? kids(txBody, "p") : [];
+  const textLines: string[] = paragraphs.map((p) =>
+    deep(p, "t").map((t) => t.textContent ?? "").join("")
+  );
+  const hasText = textLines.some((l) => l.length > 0);
+
+  if (!hasText) {
+    const fillClr = spPr ? deep(spPr, "srgbClr")[0] : null;
+    const fill = fillClr ? `#${(fillClr.getAttribute("val") ?? "DBE7F0").toLowerCase()}` : undefined;
+    const el: SlideElement = { id: newElemId(), kind: "rect", x, y, w, h, fill };
+    clampElement(el);
+    return el;
+  }
+
+  // text element: take style from the first styled run/paragraph
+  const firstPPr = paragraphs.map((p) => kid(p, "pPr")).find((p) => p) ?? null;
+  const algnAttr = firstPPr?.getAttribute("algn") ?? null;
+  const align = algnAttr === "ctr" ? "center" : algnAttr === "r" ? "right" : "left";
+  const firstRPr = deep(txBody!, "rPr")[0] ?? null;
+  const szAttr = firstRPr?.getAttribute("sz");
+  const size = szAttr ? Math.max(12, Math.round(Number(szAttr) / 100 / PT_PER_UNIT)) : 36;
+  const bold = firstRPr?.getAttribute("b") === "1";
+  const clr = firstRPr ? deep(firstRPr, "srgbClr")[0] : null;
+  const color = clr ? `#${(clr.getAttribute("val") ?? "222222").toLowerCase()}` : "#222222";
+
+  const rPrs = deep(txBody!, "rPr");
+  if (rPrs.length > 1) {
+    const uniform = rPrs.every(
+      (r) =>
+        (r.getAttribute("sz") ?? "") === (rPrs[0]!.getAttribute("sz") ?? "") &&
+        (r.getAttribute("b") ?? "") === (rPrs[0]!.getAttribute("b") ?? "")
+    );
+    if (!uniform) {
+      warnings.push({
+        code: "PPTX-IMPORT-MIXED-RUNS",
+        message: `Slide ${slideIndex + 1}: mixed per-run formatting flattened to the first run's style (per-run styling not yet in the model).`,
+        blockIndex: slideIndex,
+      });
+    }
+  }
+
+  const el: SlideElement = {
+    id: newElemId(),
+    kind: "text",
+    x,
+    y,
+    w,
+    h,
+    text: textLines.join("\n"),
+    size,
+    bold,
+    align,
+    color,
+  };
+  clampElement(el);
+  return el;
+}
+
+export async function importPptx(
+  bytes: Uint8Array,
+  parseXml: XmlParse = defaultParse
+): Promise<{ deck: DeckModel; report: LossReport }> {
+  const warnings: LossWarning[] = [];
+  const entries = await zipRead(bytes);
+  const byName = new Map(entries.map((e) => [e.name, e]));
+  const presEntry = byName.get("ppt/presentation.xml");
+  if (!presEntry) throw new Error("Not a PPTX package: ppt/presentation.xml missing");
+  const pres = parseXml(textDecoder.decode(presEntry.data));
+
+  // slide size → per-axis scaling into the 1600×900 logical canvas
+  const sldSz = deep(pres, "sldSz")[0];
+  const cx = Number(sldSz?.getAttribute("cx") ?? SLIDE_CX);
+  const cy = Number(sldSz?.getAttribute("cy") ?? SLIDE_CY);
+  const scale: SlideScale = { x: CANVAS_W / cx, y: CANVAS_H / cy };
+  if (Math.abs(cx / cy - 16 / 9) > 0.02) {
+    warnings.push({
+      code: "PPTX-IMPORT-ASPECT",
+      message: `Source slides are ${cx}×${cy} EMU (not 16:9); geometry was scaled per axis to fit the 16:9 canvas.`,
+      blockIndex: -1,
+    });
+  }
+
+  // resolve slide order via presentation rels
+  const relsEntry = byName.get("ppt/_rels/presentation.xml.rels");
+  const relTargets = new Map<string, string>();
+  if (relsEntry) {
+    const relsDom = parseXml(textDecoder.decode(relsEntry.data));
+    for (const rel of deep(relsDom, "Relationship")) {
+      relTargets.set(rel.getAttribute("Id") ?? "", rel.getAttribute("Target") ?? "");
+    }
+  }
+  const slideParts: string[] = [];
+  for (const sldId of deep(pres, "sldId")) {
+    const rId =
+      sldId.getAttributeNS?.("http://schemas.openxmlformats.org/officeDocument/2006/relationships", "id") ??
+      sldId.getAttribute("r:id") ??
+      "";
+    const target = relTargets.get(rId);
+    if (target) slideParts.push("ppt/" + target.replace(/^\.\//, ""));
+  }
+  if (slideParts.length === 0) {
+    // fall back to name order
+    for (const name of [...byName.keys()].sort()) {
+      if (/^ppt\/slides\/slide\d+\.xml$/.test(name)) slideParts.push(name);
+    }
+  }
+  if (slideParts.length === 0) throw new Error("PPTX package has no slides");
+
+  const deck: DeckModel = { schemaVersion: DECK_SCHEMA_VERSION, slides: [] };
+  slideParts.forEach((part, si) => {
+    const entry = byName.get(part);
+    const slide: Slide = { id: newElemId(), elements: [] };
+    if (!entry) {
+      warnings.push({
+        code: "PPTX-IMPORT-MISSING-PART",
+        message: `Slide part ${part} is referenced but missing; imported as an empty slide.`,
+        blockIndex: si,
+      });
+      deck.slides.push(slide);
+      return;
+    }
+    const dom = parseXml(textDecoder.decode(entry.data));
+    const spTree = deep(dom, "spTree")[0];
+    if (!spTree) {
+      deck.slides.push(slide);
+      return;
+    }
+    const fallbackSlot = { n: 0 };
+    for (let i = 0; i < spTree.children.length; i++) {
+      const child = spTree.children[i]!;
+      if (child.localName === "sp") {
+        const el = importShape(child, scale, warnings, si, fallbackSlot);
+        if (el) slide.elements.push(el);
+      } else if (child.localName === "pic") {
+        warnings.push({
+          code: "PPTX-IMPORT-PICTURE",
+          message: `Slide ${si + 1}: a picture was skipped (images not yet in the model).`,
+          blockIndex: si,
+        });
+      } else if (child.localName === "graphicFrame") {
+        warnings.push({
+          code: "PPTX-IMPORT-GRAPHIC",
+          message: `Slide ${si + 1}: a table/chart/diagram frame was skipped.`,
+          blockIndex: si,
+        });
+      } else if (child.localName === "grpSp") {
+        warnings.push({
+          code: "PPTX-IMPORT-GROUP",
+          message: `Slide ${si + 1}: a grouped shape was skipped (group transforms not yet supported).`,
+          blockIndex: si,
+        });
+      }
+    }
+    deck.slides.push(slide);
+  });
+
+  const errors = validateDeck(deck);
+  if (errors.length > 0) throw new Error(`PPTX import produced invalid deck: ${errors.join("; ")}`);
+  return { deck, report: { format: "pptx", lossless: warnings.length === 0, warnings } };
 }

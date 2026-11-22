@@ -67,3 +67,85 @@ test("pptx: deterministic output for identical decks", async () => {
   const b = await exportPptx(deck);
   assert.deepEqual(a.bytes, b.bytes);
 });
+
+// ---------- import ----------
+import { importPptx } from "../src/pptx";
+import { JSDOM } from "jsdom";
+
+const parseXml = (xml: string): Document =>
+  new (new JSDOM("").window.DOMParser)().parseFromString(xml, "application/xml") as unknown as Document;
+
+test("pptx: export → import round-trip preserves slides, geometry, text, and style", async () => {
+  const original = sampleDeck();
+  const { bytes } = await exportPptx(original);
+  const { deck, report } = await importPptx(bytes, parseXml);
+  assert.equal(report.lossless, true, JSON.stringify(report.warnings));
+  assert.equal(deck.slides.length, original.slides.length);
+  original.slides.forEach((slide, si) => {
+    const back = deck.slides[si]!;
+    assert.equal(back.elements.length, slide.elements.length, `slide ${si} element count`);
+    slide.elements.forEach((el, ei) => {
+      const b = back.elements[ei]!;
+      assert.equal(b.kind, el.kind, `slide ${si} el ${ei} kind`);
+      assert.ok(Math.abs(b.x - el.x) < 1 && Math.abs(b.y - el.y) < 1, "geometry x/y");
+      assert.ok(Math.abs(b.w - el.w) < 1 && Math.abs(b.h - el.h) < 1, "geometry w/h");
+      if (el.kind === "text") {
+        assert.equal(b.text, el.text, "text");
+        assert.equal(b.bold ?? false, el.bold ?? false, "bold");
+        assert.equal(b.align ?? "left", el.align ?? "left", "align");
+        assert.ok(Math.abs((b.size ?? 36) - (el.size ?? 36)) <= 1, "size");
+      } else {
+        assert.equal((b.fill ?? "").toLowerCase(), (el.fill ?? "").toLowerCase(), "fill");
+      }
+    });
+  });
+});
+
+test("pptx: import reports pictures, frames, groups, and missing geometry", async () => {
+  const slide =
+    `<?xml version="1.0"?><p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" ` +
+    `xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree>` +
+    `<p:nvGrpSpPr/><p:grpSpPr/>` +
+    `<p:sp><p:nvSpPr/><p:spPr/><p:txBody><a:p><a:r><a:t>Placeholder title</a:t></a:r></a:p></p:txBody></p:sp>` +
+    `<p:pic/><p:graphicFrame/><p:grpSp/>` +
+    `</p:spTree></p:cSld></p:sld>`;
+  const bytes = await zipWriteHelper([
+    ["ppt/presentation.xml", `<p:presentation xmlns:p="x"><p:sldSz cx="12192000" cy="6858000"/></p:presentation>`],
+    ["ppt/slides/slide1.xml", slide],
+  ]);
+  const { deck, report } = await importPptx(bytes, parseXml);
+  assert.equal(deck.slides.length, 1);
+  assert.equal(deck.slides[0]!.elements.length, 1);
+  assert.equal(deck.slides[0]!.elements[0]!.text, "Placeholder title");
+  const codes = report.warnings.map((w) => w.code);
+  for (const expected of ["PPTX-IMPORT-NO-GEOMETRY", "PPTX-IMPORT-PICTURE", "PPTX-IMPORT-GRAPHIC", "PPTX-IMPORT-GROUP"]) {
+    assert.ok(codes.includes(expected), `missing ${expected} in ${codes}`);
+  }
+});
+
+test("pptx: 4:3 decks are scaled per axis with a warning", async () => {
+  const slide =
+    `<p:sld xmlns:p="x" xmlns:a="y"><p:cSld><p:spTree>` +
+    `<p:sp><p:spPr><a:xfrm><a:off x="4572000" y="3429000"/><a:ext cx="4572000" cy="1714500"/></a:xfrm></p:spPr>` +
+    `<p:txBody><a:p><a:r><a:t>center</a:t></a:r></a:p></p:txBody></p:sp>` +
+    `</p:spTree></p:cSld></p:sld>`;
+  // 4:3 deck: 9144000 x 6858000
+  const bytes = await zipWriteHelper([
+    ["ppt/presentation.xml", `<p:presentation xmlns:p="x"><p:sldSz cx="9144000" cy="6858000"/></p:presentation>`],
+    ["ppt/slides/slide1.xml", slide],
+  ]);
+  const { deck, report } = await importPptx(bytes, parseXml);
+  assert.ok(report.warnings.some((w) => w.code === "PPTX-IMPORT-ASPECT"));
+  const el = deck.slides[0]!.elements[0]!;
+  assert.equal(Math.round(el.x), 800); // half of 1600
+  assert.equal(Math.round(el.y), 450); // half of 900
+});
+
+test("pptx: non-pptx input fails loudly", async () => {
+  await assert.rejects(() => importPptx(new TextEncoder().encode("nope"), parseXml));
+});
+
+async function zipWriteHelper(parts: [string, string][]) {
+  const { zipWrite } = await import("../src/zip.js");
+  return zipWrite(parts.map(([name, xml]) => ({ name, data: new TextEncoder().encode(xml) })));
+}
