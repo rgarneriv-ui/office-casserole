@@ -7,7 +7,8 @@
 
 import { DocModel, Mark } from "./types";
 import { blockText, marksEqual, sortMarks } from "./model";
-import { toggleMark } from "./operations";
+import { setBlockType, toggleMark } from "./operations";
+import { OpRecorder } from "./oplog";
 
 export type CodeKind = "block-start" | "block-end" | "mark-on" | "mark-off" | "text";
 
@@ -161,7 +162,8 @@ export function markSpanOf(
 export function applyCodeAction(
   model: DocModel,
   code: FormatCode,
-  action: CodeAction
+  action: CodeAction,
+  rec?: OpRecorder
 ): string | null {
   if (action.kind === "remove-mark" && (code.kind === "mark-on" || code.kind === "mark-off")) {
     const span = markSpanOf(model, code);
@@ -170,13 +172,21 @@ export function applyCodeAction(
       anchor: { block: code.blockIndex, offset: span.start },
       focus: { block: code.blockIndex, offset: span.end },
     };
-    toggleMark(model, range, span.mark);
+    toggleMark(model, range, span.mark, rec);
     return `Removed ${MARK_LABEL[span.mark]} from characters ${span.start}–${span.end} of block ${code.blockIndex + 1}`;
   }
   if (action.kind === "set-block-type" && code.kind === "block-start") {
     const block = model.blocks[code.blockIndex];
     if (!block) return null;
-    block.type = action.blockType;
+    setBlockType(
+      model,
+      {
+        anchor: { block: code.blockIndex, offset: 0 },
+        focus: { block: code.blockIndex, offset: 0 },
+      },
+      action.blockType,
+      rec
+    );
     return `Block ${code.blockIndex + 1} set to ${BLOCK_LABEL[action.blockType]}`;
   }
   return null;

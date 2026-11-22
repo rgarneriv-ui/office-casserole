@@ -10,7 +10,8 @@ import {
   Block,
   DocModel,
   DocRange,
-  History,
+  TransactionLog,
+  applyOp,
   Mark,
   Position,
   blockText,
@@ -48,7 +49,7 @@ const BLOCK_TAG: Record<string, string> = { paragraph: "p", heading1: "h1", head
 let model: DocModel = newDocument();
 let selection: DocRange = { anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 0 } };
 let caretMarks: Mark[] | null = null; // pending marks for a collapsed caret
-const history = new History();
+const log = new TransactionLog();
 let saveTimer: number | null = null;
 let recovered = false;
 
@@ -248,8 +249,8 @@ function renderCodes(): void {
       if (btn.dataset.x !== undefined) {
         const c = codes2[Number(btn.dataset.x)];
         if (!c) return;
-        history.checkpoint(model);
-        const msg = applyCodeAction(model, c, { kind: "remove-mark" });
+        log.begin();
+        const msg = applyCodeAction(model, c, { kind: "remove-mark" }, log);
         if (msg) {
           statusEl.textContent = msg;
           render();
@@ -259,8 +260,8 @@ function renderCodes(): void {
         const c = codes2[Number(btn.dataset.cycle)];
         if (!c) return;
         const next = BLOCK_CYCLE[model.blocks[c.blockIndex]?.type ?? "paragraph"]!;
-        history.checkpoint(model);
-        const msg = applyCodeAction(model, c, { kind: "set-block-type", blockType: next });
+        log.begin();
+        const msg = applyCodeAction(model, c, { kind: "set-block-type", blockType: next }, log);
         if (msg) {
           statusEl.textContent = msg;
           render();
@@ -314,27 +315,14 @@ type CommandId =
   | "redo";
 
 function dispatch(id: CommandId, payload?: unknown): void {
-  if (id === "undo") {
-    const prev = history.undo(model);
-    if (prev) {
-      model = prev;
+  if (id === "undo" || id === "redo") {
+    const ok = id === "undo" ? log.undo(model) : log.redo(model);
+    if (ok) {
       selection = {
         anchor: clampPosition(model, selection.anchor),
         focus: clampPosition(model, selection.focus),
       };
-      render();
-      scheduleSave();
-    }
-    return;
-  }
-  if (id === "redo") {
-    const next = history.redo(model);
-    if (next) {
-      model = next;
-      selection = {
-        anchor: clampPosition(model, selection.anchor),
-        focus: clampPosition(model, selection.focus),
-      };
+      caretMarks = null;
       render();
       scheduleSave();
     }
@@ -342,48 +330,48 @@ function dispatch(id: CommandId, payload?: unknown): void {
   }
 
   const coalesceKey = id === "insertText" ? "type" : id === "deleteBackward" ? "del" : null;
-  history.checkpoint(model, coalesceKey);
+  log.begin(coalesceKey);
 
   switch (id) {
     case "insertText": {
       const text = String(payload ?? "");
       if (!isCollapsed(selection)) {
-        const caret = deleteRange(model, selection);
+        const caret = deleteRange(model, selection, log);
         selection = { anchor: caret, focus: caret };
       }
       const marks =
         caretMarks ?? marksAt(model.blocks[selection.focus.block]!, selection.focus.offset);
-      const caret = insertText(model, selection.focus, text, marks);
+      const caret = insertText(model, selection.focus, text, marks, log);
       selection = { anchor: caret, focus: caret };
       break;
     }
     case "deleteSelection": {
-      const caret = deleteRange(model, selection);
+      const caret = deleteRange(model, selection, log);
       selection = { anchor: caret, focus: caret };
       break;
     }
     case "deleteBackward": {
       if (!isCollapsed(selection)) {
-        const caret = deleteRange(model, selection);
+        const caret = deleteRange(model, selection, log);
         selection = { anchor: caret, focus: caret };
       } else if (selection.focus.offset > 0) {
         const caret = deleteRange(model, {
           anchor: { block: selection.focus.block, offset: selection.focus.offset - 1 },
           focus: selection.focus,
-        });
+        }, log);
         selection = { anchor: caret, focus: caret };
       } else if (selection.focus.block > 0) {
-        const caret = mergeWithPrevious(model, selection.focus.block);
+        const caret = mergeWithPrevious(model, selection.focus.block, log);
         selection = { anchor: caret, focus: caret };
       }
       break;
     }
     case "splitBlock": {
       if (!isCollapsed(selection)) {
-        const caret = deleteRange(model, selection);
+        const caret = deleteRange(model, selection, log);
         selection = { anchor: caret, focus: caret };
       }
-      const caret = splitBlock(model, selection.focus);
+      const caret = splitBlock(model, selection.focus, log);
       selection = { anchor: caret, focus: caret };
       break;
     }
@@ -396,11 +384,11 @@ function dispatch(id: CommandId, payload?: unknown): void {
         updateToolbar();
         return; // no model change yet; next typed character applies it
       }
-      toggleMark(model, selection, mark);
+      toggleMark(model, selection, mark, log);
       break;
     }
     case "setBlockType": {
-      setBlockType(model, selection, payload as Block["type"]);
+      setBlockType(model, selection, payload as Block["type"], log);
       break;
     }
   }
@@ -628,6 +616,7 @@ async function refreshDocList(): Promise<void> {
 }
 
 function resetEditorState(newModel: DocModel, title: string, id: string, revs: StoredRevision[] = []): void {
+  log.clear();
   model = newModel;
   currentDocId = id;
   currentTitle = title;
@@ -784,8 +773,14 @@ function restoreRevision(revId: string): void {
   if (!window.confirm(`Restore revision "${rev.name}"? The current state stays in undo history.`)) return;
   try {
     const revModel = fromJSON(JSON.stringify(rev.doc));
-    history.checkpoint(model);
-    model = revModel;
+    log.begin();
+    const op = {
+      t: "replace-model",
+      before: fromJSON(toJSON(model)),
+      after: revModel,
+    } as const;
+    log.record(op);
+    applyOp(model, op);
     selection = { anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 0 } };
     caretMarks = null;
     render();
@@ -863,13 +858,13 @@ const COMMANDS: CommandDefinition[] = [
   blockCmd("heading2", "Heading 2"),
   {
     id: "edit.undo", name: "Undo", description: "Undo the last transaction",
-    isPermitted: () => true, isAvailable: () => history.canUndo(), undoable: false,
+    isPermitted: () => true, isAvailable: () => log.canUndo(), undoable: false,
     shortcut: "Ctrl/Cmd-Z", auditClassification: "document-modification",
     run: () => dispatch("undo"),
   },
   {
     id: "edit.redo", name: "Redo", description: "Redo the last undone transaction",
-    isPermitted: () => true, isAvailable: () => history.canRedo(), undoable: false,
+    isPermitted: () => true, isAvailable: () => log.canRedo(), undoable: false,
     shortcut: "Ctrl/Cmd-Y", auditClassification: "document-modification",
     run: () => dispatch("redo"),
   },

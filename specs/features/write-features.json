@@ -56,8 +56,8 @@
       }
     ],
     "knownLimitations": [
-      "Snapshot-based undo (ADR-0001); per-operation logs deferred to collaboration phase",
-      "End-to-end tests cover boot/render; full input-simulation E2E not yet automated — status stays below verified"
+      "End-to-end tests cover boot/render; full input-simulation E2E not yet automated — status stays below verified",
+      "Undo is operation-log based since ADR-0009 (Slides deck still snapshot-based)"
     ]
   },
   {
@@ -519,6 +519,61 @@
     ],
     "knownLimitations": [
       "Block-granularity diff (no intra-block run diff yet); review branches/merge not yet built; revisions are full copies until op-log migration"
+    ]
+  },
+  {
+    "id": "WRITE-EDIT-002",
+    "application": "casserole-write",
+    "name": "Operation-log undo/redo",
+    "priority": "P0",
+    "description": "All document mutations decompose into five invertible primitives recorded in a transaction log; undo replays inverses, redo replays originals; typing coalesces; byte-stable round-trips including block ids.",
+    "baseline": {
+      "product": "Microsoft Word",
+      "capability": "Undo architecture (reference behavior)",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
+    "owner": "engines/document-model (oplog)",
+    "dependencies": [
+      "WRITE-EDIT-001"
+    ],
+    "commands": [
+      "edit.undo",
+      "edit.redo"
+    ],
+    "offlineSupport": "fully offline",
+    "edgeCases": [
+      "cross-block delete decomposition",
+      "no coalescing across redo boundary",
+      "replace-model for restore/import",
+      "recorder aliasing isolation"
+    ],
+    "acceptance": [
+      "invertOp is an involution for every primitive",
+      "Every high-level operation single-op inverts to the exact prior state (ids included)",
+      "A mixed 7-step session unwinds and replays through exact intermediate states"
+    ],
+    "verification": {
+      "required": [
+        "unit",
+        "end-to-end"
+      ]
+    },
+    "status": "tested",
+    "evidence": [
+      {
+        "kind": "test-run",
+        "ref": "oplog.test.ts: 7 property tests pass",
+        "date": "2026-11-22"
+      },
+      {
+        "kind": "test-run",
+        "ref": "all 84 prior unit tests + 6 smoke scenarios pass unchanged on the op-based engine",
+        "date": "2026-11-22"
+      }
+    ],
+    "knownLimitations": [
+      "No op serialization/authorship yet (next step toward §14.1 collaboration); Slides deck undo still snapshot-based"
     ]
   }
 ]

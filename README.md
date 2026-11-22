@@ -13,9 +13,10 @@ shared contracts, the canonical document engine, and the first functioning
 ## What works today
 
 - **engines/document-model** — typed, versioned document model with enforced
-  invariants; editing operations (insert, delete across blocks, split/merge,
-  marks, block types); transaction-coalesced undo/redo; **Reveal Codes**
-  structural inspector (§6.2) derived from the canonical model; JSON/HTML
+  invariants; editing operations that decompose into **invertible primitive
+  operations** recorded in a transaction log (ADR-0009 — undo/redo replays
+  inverses, byte-stable round-trips); **Reveal Codes** structural inspector
+  (§6.2) derived from the canonical model; block-level diff; JSON/HTML
   serialization and Markdown export with a per-export **loss report** (§5.2).
 - **engines/format-conversion** — in-house ZIP container (CRC-validated,
   deflate via CompressionStream) and **DOCX export/import** for the model
@@ -121,10 +122,10 @@ files saved by actual Office applications are the ones that matter most.
 
 1. Grow the fixture corpus with real Word/Excel/PowerPoint files; Original
    Format Preservation store (§5.1) for round-tripping unknown parts.
-2. Operation logs replacing snapshot undo (ADR-0001/0003 migration) — the
-   gateway to Phase-4 collaboration; revisions then become log checkpoints
-   (ADR-0008).
+2. Collaboration substrate on the operation log (ADR-0009): op
+   serialization + authorship, then transform/rebase semantics (§14.1);
+   convert revisions to log checkpoints (ADR-0008).
 3. Intra-block (run-level) diff; review branches and semantic merge (§14.2
-   top layer).
+   top layer); migrate Slides deck undo to the op-log pattern.
 4. Full command-registry inversion; palettes for Sheets/Slides; font
    embedding/subsetting for non-Latin PDF output.
