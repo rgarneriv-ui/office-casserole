@@ -127,8 +127,41 @@ test("xlsx: cell formats export as real styles (s attrs + styleSheet)", async ()
   const ws = new TextDecoder().decode(entries.find((e) => e.name === "xl/worksheets/sheet1.xml")!.data);
   assert.ok(/<c r="A1" s="\d+" t="inlineStr">/.test(ws), "bold text cell carries a style");
   assert.ok(/<c r="B1" s="\d+">/.test(ws), "currency cell carries a style");
-  // importing our styled export keeps the data and reports the dropped styles
+  // importing our styled export round-trips the formats losslessly
   const { sheet, report } = await importXlsx(bytes, parseXml);
+  assert.equal(report.lossless, true, JSON.stringify(report.warnings));
   assert.equal(sheet.getCell("B1"), 1234.5);
-  assert.ok(report.warnings.some((w) => w.code === "XLSX-IMPORT-STYLES"));
+  assert.deepEqual(sheet.getFormat("A1"), { bold: true });
+  assert.deepEqual(sheet.getFormat("B1"), { bold: true, numFmt: "currency" });
+  assert.deepEqual(sheet.getFormat("C1"), { numFmt: "percent" });
+  assert.equal(sheet.getDisplay("B1"), "$1,234.50", "display formatting restored");
+});
+
+test("xlsx: foreign styles map by heuristic; unrepresentable aspects warn once", async () => {
+  const styles =
+    `<?xml version="1.0"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+    `<numFmts count="1"><numFmt numFmtId="170" formatCode="0.0%"/></numFmts>` +
+    `<fonts count="2"><font/><font><b/><i/></font></fonts>` +
+    `<cellXfs count="3">` +
+    `<xf numFmtId="0" fontId="0"/>` +
+    `<xf numFmtId="170" fontId="0"><alignment horizontal="center"/></xf>` +
+    `<xf numFmtId="9" fontId="1" borderId="1"/>` +
+    `</cellXfs></styleSheet>`;
+  const ws =
+    `<worksheet xmlns="x"><sheetData><row r="1">` +
+    `<c r="A1" s="1"><v>0.5</v></c>` +
+    `<c r="B1" s="2"><v>0.25</v></c>` +
+    `</row></sheetData></worksheet>`;
+  const bytes = await zipWrite([
+    { name: "xl/workbook.xml", data: new TextEncoder().encode(`<workbook xmlns="x"><sheets><sheet name="S" sheetId="1"/></sheets></workbook>`) },
+    { name: "xl/styles.xml", data: new TextEncoder().encode(styles) },
+    { name: "xl/worksheets/sheet1.xml", data: new TextEncoder().encode(ws) },
+  ]);
+  const { sheet, report } = await importXlsx(bytes, parseXml);
+  assert.deepEqual(sheet.getFormat("A1"), { numFmt: "percent", align: "center" }, "custom % code classified");
+  assert.deepEqual(sheet.getFormat("B1"), { bold: true, numFmt: "percent" }, "builtin 9 + bold");
+  const styleWarnings = report.warnings.filter((w) => w.code === "XLSX-IMPORT-STYLES");
+  assert.equal(styleWarnings.length, 1, "one summary warning");
+  assert.ok(styleWarnings[0]!.message.includes("font i"), styleWarnings[0]!.message);
+  assert.ok(styleWarnings[0]!.message.includes("border"));
 });

@@ -9,7 +9,7 @@
  */
 
 import { LossReport, LossWarning } from "../../document-model/src/serialize";
-import { Sheet } from "../../spreadsheet-calc/src/engine";
+import { CellFormat, Sheet } from "../../spreadsheet-calc/src/engine";
 import { formatAddr, parseAddr } from "../../spreadsheet-calc/src/addr";
 import { isError } from "../../spreadsheet-calc/src/types";
 import { ZipEntry, zipRead, zipWrite } from "./zip";
@@ -200,6 +200,74 @@ export async function importXlsx(
   const workbookEntry = byName.get("xl/workbook.xml");
   if (!workbookEntry) throw new Error("Not an XLSX package: xl/workbook.xml missing");
 
+  // styles: map s= indexes to the subset of formatting we can represent
+  interface XfInfo {
+    format: CellFormat;
+    dropped: string[];
+  }
+  const xfTable: XfInfo[] = [];
+  const stylesEntry = byName.get("xl/styles.xml");
+  if (stylesEntry) {
+    try {
+      const dom = parseXml(textDecoder.decode(stylesEntry.data));
+      const numFmtCodes = new Map<number, string>();
+      for (const nf of descendants(dom, "numFmt")) {
+        numFmtCodes.set(Number(nf.getAttribute("numFmtId")), nf.getAttribute("formatCode") ?? "");
+      }
+      const fonts: { bold: boolean; other: string[] }[] = [];
+      const fontsEl = descendants(dom, "fonts")[0];
+      if (fontsEl) {
+        for (const f of descendants(fontsEl, "font")) {
+          const names = Array.from(f.children).map((c) => c.localName);
+          fonts.push({
+            bold: names.includes("b"),
+            other: names.filter((n) => ["i", "u", "strike", "color"].includes(n)),
+          });
+        }
+      }
+      const BUILTIN_NUMFMT: Record<number, CellFormat["numFmt"]> = {
+        2: "number2", 4: "number2", 39: "number2", 40: "number2",
+        9: "percent", 10: "percent",
+        5: "currency", 6: "currency", 7: "currency", 8: "currency", 44: "currency",
+      };
+      const classifyNumFmt = (id: number): { fmt?: CellFormat["numFmt"]; dropped?: string } => {
+        if (id === 0) return {};
+        if (BUILTIN_NUMFMT[id]) return { fmt: BUILTIN_NUMFMT[id] };
+        const code = numFmtCodes.get(id);
+        if (code !== undefined) {
+          if (code.includes("%")) return { fmt: "percent" };
+          if (code.includes("$") || code.includes("\u00a4") || code.toLowerCase().includes("[$")) return { fmt: "currency" };
+          if (/^#,##0\.0+$|^0\.0+$|^#,##0$/.test(code)) return { fmt: "number2" };
+          return { dropped: `number format "${code}"` };
+        }
+        return { dropped: `number format id ${id}` };
+      };
+      const cellXfsEl = descendants(dom, "cellXfs")[0];
+      if (cellXfsEl) {
+        for (const xf of descendants(cellXfsEl, "xf")) {
+          const info: XfInfo = { format: {}, dropped: [] };
+          const font = fonts[Number(xf.getAttribute("fontId") ?? 0)];
+          if (font?.bold) info.format.bold = true;
+          if (font && font.other.length > 0) info.dropped.push(...font.other.map((n) => `font ${n}`));
+          const nf = classifyNumFmt(Number(xf.getAttribute("numFmtId") ?? 0));
+          if (nf.fmt) info.format.numFmt = nf.fmt;
+          if (nf.dropped) info.dropped.push(nf.dropped);
+          const alignEl = descendants(xf, "alignment")[0];
+          const horizontal = alignEl?.getAttribute("horizontal");
+          if (horizontal === "left" || horizontal === "center" || horizontal === "right") {
+            info.format.align = horizontal;
+          }
+          if (Number(xf.getAttribute("fillId") ?? 0) > 1) info.dropped.push("fill");
+          if (Number(xf.getAttribute("borderId") ?? 0) > 0) info.dropped.push("border");
+          xfTable.push(info);
+        }
+      }
+    } catch {
+      /* unreadable styles: cells import unformatted; warning fires below if s= is seen */
+    }
+  }
+  const droppedAspects = new Set<string>();
+
   // shared strings, if the producer used them
   const shared: string[] = [];
   const sst = byName.get("xl/sharedStrings.xml");
@@ -227,6 +295,7 @@ export async function importXlsx(
   const ws = parseXml(textDecoder.decode(byName.get(wsName)!.data));
 
   const sheet = new Sheet();
+  const pendingFormats: [string, CellFormat][] = [];
   interface Pending {
     addr: string;
     storedValue: string | null;
@@ -242,14 +311,14 @@ export async function importXlsx(
     const v = firstChild(c, "v");
     const is = firstChild(c, "is");
 
-    if (c.getAttribute("s")) {
-      // styles exist in the source; our model has no formatting yet
-      if (!warnings.some((w) => w.code === "XLSX-IMPORT-STYLES")) {
-        warnings.push({
-          code: "XLSX-IMPORT-STYLES",
-          message: "Cell formatting/styles are not yet supported and were dropped.",
-          blockIndex: -1,
-        });
+    const sAttr = c.getAttribute("s");
+    if (sAttr !== null) {
+      const info = xfTable[Number(sAttr)];
+      if (info) {
+        if (Object.keys(info.format).length > 0 && addr) pendingFormats.push([addr, info.format]);
+        for (const d of info.dropped) droppedAspects.add(d);
+      } else if (Number(sAttr) > 0) {
+        droppedAspects.add("unresolved style reference");
       }
     }
 
@@ -277,6 +346,15 @@ export async function importXlsx(
     } else if (v?.textContent != null) {
       sheet.setCell(addr, v.textContent);
     }
+  }
+
+  for (const [addr, format] of pendingFormats) sheet.setFormat(addr, format);
+  if (droppedAspects.size > 0) {
+    warnings.push({
+      code: "XLSX-IMPORT-STYLES",
+      message: `Some cell styling could not be represented and was dropped: ${[...droppedAspects].join(", ")}.`,
+      blockIndex: -1,
+    });
   }
 
   // differential-lite: compare our recomputed values with the producer's

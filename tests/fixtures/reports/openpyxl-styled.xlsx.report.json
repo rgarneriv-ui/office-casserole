@@ -1,0 +1,15 @@
+{
+  "fixture": "openpyxl-styled.xlsx",
+  "format": "xlsx",
+  "ok": true,
+  "cells": 3,
+  "lossless": false,
+  "mismatches": 0,
+  "warnings": [
+    {
+      "code": "XLSX-IMPORT-STYLES",
+      "message": "Some cell styling could not be represented and was dropped: font color.",
+      "blockIndex": -1
+    }
+  ]
+}

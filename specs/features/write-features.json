@@ -641,7 +641,7 @@
     "application": "casserole-write",
     "name": "Bulleted and numbered lists",
     "priority": "P0",
-    "description": "List block types through the full pipeline: editing with list continuation and empty-item exit, Reveal Codes, HTML ul/ol, Markdown, OOXML numbering in DOCX both ways, PDF hanging-indent prefixes.",
+    "description": "List block types with nesting levels 0-3 (Tab/Shift-Tab, per-level markers 1./a./i./1) and bullet glyphs) through the full pipeline: editing with list continuation and empty-item exit, Reveal Codes, HTML ul/ol, Markdown, OOXML numbering in DOCX both ways, PDF hanging-indent prefixes.",
     "baseline": {
       "product": "Microsoft Word",
       "capability": "Basic bulleted/numbered lists",
@@ -684,10 +684,15 @@
         "kind": "report",
         "ref": "python-docx cross-validation of list export",
         "date": "2026-11-22"
+      },
+      {
+        "kind": "test-run",
+        "ref": "nested-list suites: ops inversion, HTML nesting validity, MD indentation, DOCX ilvl round-trip",
+        "date": "2026-11-22"
       }
     ],
     "knownLimitations": [
-      "Single list level (no nesting yet)"
+      "Nesting capped at 4 levels"
     ]
   },
   {

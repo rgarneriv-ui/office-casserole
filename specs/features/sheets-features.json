@@ -103,7 +103,7 @@
     "application": "casserole-sheets",
     "name": "XLSX export/import with differential value checks",
     "priority": "P0",
-    "description": "Export workbooks (inline strings, formulas with cached values, booleans, error cells); import inline- and sharedStrings-style producers, re-evaluating formulas and reporting mismatches vs the producer stored values.",
+    "description": "Export workbooks (inline strings, formulas with cached values, booleans, error cells); import inline- and sharedStrings-style producers, re-evaluating formulas and reporting mismatches vs the producer stored values; styles import to our format subset.",
     "baseline": {
       "product": "Microsoft Excel",
       "capability": "XLSX (ECMA-376 subset)",
@@ -158,7 +158,7 @@
     "application": "casserole-sheets",
     "name": "Cell formatting (bold, alignment, number formats)",
     "priority": "P1",
-    "description": "Per-cell display formats — bold, left/center/right alignment, Number/Currency/Percent — applied from the toolbar, persisted with the sheet, rendered in the grid and CSV display values, and exported as real XLSX styles (numFmts + fonts + cellXfs). Values and the dependency graph are untouched by formatting.",
+    "description": "Per-cell display formats — bold, left/center/right alignment, Number/Currency/Percent — applied from the toolbar, persisted with the sheet, rendered in the grid and CSV display values, and exported as real XLSX styles (numFmts + fonts + cellXfs). Values and the dependency graph are untouched by formatting. XLSX import reads styles back (bold, alignment, number formats via builtin ids and format-code heuristics), so styled round-trips are lossless; unrepresentable aspects warn once with specifics.",
     "baseline": {
       "product": "Microsoft Excel",
       "capability": "Basic cell formatting",
@@ -208,11 +208,15 @@
         "kind": "test-run",
         "ref": "smoke-sheets.mjs format scenario: pass",
         "date": "2026-11-22"
+      },
+      {
+        "kind": "test-run",
+        "ref": "style import suites + openpyxl-styled foreign fixture (bold/currency/percent/center imported)",
+        "date": "2026-11-22"
       }
     ],
     "knownLimitations": [
-      "XLSX import does not read formats yet (reported as XLSX-IMPORT-STYLES)",
-      "No fills, borders, fonts, or column widths yet"
+      "No fills, borders, italic, fonts, or column widths yet (dropped with a specific warning on import)"
     ]
   }
 ]
