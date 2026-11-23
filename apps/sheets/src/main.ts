@@ -11,6 +11,7 @@ import {
   Rect,
   clearRange,
   copyRange,
+  fillRange,
   normalizeRect,
   pasteClip,
   pasteTSV,
@@ -31,6 +32,8 @@ let selAnchor = "A1"; // selection anchor (shift-select / drag origin)
 let editing = false;
 let dragging = false;
 let clip: ClipData | null = null;
+let fillDrag: { src: Rect; dest: Rect | null } = { src: { r0: 0, c0: 0, r1: 0, c1: 0 }, dest: null };
+let fillActive = false;
 void shiftFormula;
 
 function selRect(): Rect {
@@ -165,9 +168,21 @@ function refreshValues(): void {
     td.classList.toggle("num", typeof value === "number");
     td.classList.toggle("selected", addr === selected);
     td.classList.toggle("in-range", rangeIsMulti() && inRect(selRect(), a.col, a.row));
+    td.classList.toggle("fill-preview", fillActive && fillDrag.dest !== null && inRect(fillDrag.dest, a.col, a.row));
     td.classList.toggle("bold", fmt.bold === true);
     td.style.textAlign = fmt.align ?? "";
   });
+  // fill grip on the bottom-right cell of the selection
+  gridEl.querySelectorAll(".fill-grip").forEach((el) => el.remove());
+  const rr = selRect();
+  const corner = gridEl.querySelector(
+    `td[data-addr="${formatAddr({ col: rr.c1, row: rr.r1 })}"]`
+  ) as HTMLTableCellElement | null;
+  if (corner && !editing) {
+    const grip = document.createElement("span");
+    grip.className = "fill-grip";
+    corner.appendChild(grip);
+  }
   applyColWidths();
   const r = selRect();
   addrEl.textContent = rangeIsMulti()
@@ -227,6 +242,13 @@ function commit(input: string, move: "down" | "right" | "none"): void {
 }
 
 gridEl.addEventListener("pointerdown", (e) => {
+  if ((e.target as HTMLElement).classList.contains("fill-grip")) {
+    fillActive = true;
+    fillDrag = { src: selRect(), dest: null };
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
   const td = (e.target as HTMLElement).closest("td[data-addr]") as HTMLTableCellElement | null;
   if (!td) return;
   select(td.dataset.addr!, e.shiftKey);
@@ -234,11 +256,41 @@ gridEl.addEventListener("pointerdown", (e) => {
   e.preventDefault();
 });
 gridEl.addEventListener("pointerover", (e) => {
-  if (!dragging) return;
   const td = (e.target as HTMLElement).closest("td[data-addr]") as HTMLTableCellElement | null;
+  if (fillActive) {
+    if (!td) return;
+    const a = parseAddr(td.dataset.addr!)!;
+    const src = fillDrag.src;
+    // dominant axis: below → fill down; right → fill right
+    if (a.row > src.r1) {
+      fillDrag.dest = { r0: src.r1 + 1, c0: src.c0, r1: a.row, c1: src.c1 };
+    } else if (a.col > src.c1) {
+      fillDrag.dest = { r0: src.r0, c0: src.c1 + 1, r1: src.r1, c1: a.col };
+    } else {
+      fillDrag.dest = null;
+    }
+    refreshValues();
+    return;
+  }
+  if (!dragging) return;
   if (td && td.dataset.addr !== selected) select(td.dataset.addr!, true);
 });
 document.addEventListener("pointerup", () => {
+  if (fillActive) {
+    fillActive = false;
+    if (fillDrag.dest) {
+      fillRange(sheet, fillDrag.src, fillDrag.dest);
+      // extend the selection over the filled area
+      selAnchor = formatAddr({ col: fillDrag.src.c0, row: fillDrag.src.r0 });
+      selected = formatAddr({ col: fillDrag.dest.c1, row: fillDrag.dest.r1 });
+      statusEl.textContent = "Filled";
+      scheduleSave();
+    }
+    fillDrag.dest = null;
+    refreshValues();
+    formulaEl.focus();
+    return;
+  }
   if (dragging) {
     dragging = false;
     formulaEl.focus();

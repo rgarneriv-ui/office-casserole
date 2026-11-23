@@ -75,3 +75,43 @@ test("TSV out carries display values; TSV in pastes literals", () => {
   const c3 = t.getCell("C3");
   assert.ok(isError(c3), "pasted formula text evaluates (and may error) like typed input");
 });
+
+// ---------- fill handle (WO-33) ----------
+import { fillRange } from "../src/clipboard";
+
+test("fill: arithmetic series continue; single values copy; patterns cycle", () => {
+  const s = new Sheet();
+  s.setCell("A1", "10");
+  s.setCell("A2", "20");
+  fillRange(s, { r0: 0, c0: 0, r1: 1, c1: 0 }, { r0: 2, c0: 0, r1: 4, c1: 0 });
+  assert.deepEqual(["A3", "A4", "A5"].map((a) => s.getCell(a)), [30, 40, 50], "series continues");
+
+  s.setCell("B1", "hello");
+  fillRange(s, { r0: 0, c0: 1, r1: 0, c1: 1 }, { r0: 1, c0: 1, r1: 2, c1: 1 });
+  assert.deepEqual(["B2", "B3"].map((a) => s.getCell(a)), ["hello", "hello"], "single value copies");
+
+  s.setCell("C1", "x");
+  s.setCell("C2", "y");
+  s.setCell("C3", "1"); // mixed → cycle, not series
+  fillRange(s, { r0: 0, c0: 2, r1: 2, c1: 2 }, { r0: 3, c0: 2, r1: 5, c1: 2 });
+  assert.deepEqual(["C4", "C5", "C6"].map((a) => s.getCell(a)), ["x", "y", 1], "pattern cycles");
+});
+
+test("fill: formulas shift relative refs down the lane; formats travel; fill-right works", () => {
+  const s = new Sheet();
+  s.setCell("A1", "1");
+  s.setCell("A2", "2");
+  s.setCell("A3", "3");
+  s.setCell("B1", "=A1*10");
+  s.setFormat("B1", { numFmt: "currency" });
+  fillRange(s, { r0: 0, c0: 1, r1: 0, c1: 1 }, { r0: 1, c0: 1, r1: 2, c1: 1 });
+  assert.equal(s.getInput("B3"), "=A3*10");
+  assert.equal(s.getCell("B3"), 30);
+  assert.deepEqual(s.getFormat("B2"), { numFmt: "currency" });
+
+  // fill right from two columns of numbers → series per row
+  s.setCell("D1", "5");
+  s.setCell("E1", "10");
+  fillRange(s, { r0: 0, c0: 3, r1: 0, c1: 4 }, { r0: 0, c0: 5, r1: 0, c1: 7 });
+  assert.deepEqual(["F1", "G1", "H1"].map((a) => s.getCell(a)), [15, 20, 25]);
+});

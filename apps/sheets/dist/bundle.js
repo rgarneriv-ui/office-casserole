@@ -857,6 +857,46 @@
     });
     return { r0: at.row, c0: at.col, r1: at.row + rows.length - 1, c1: at.col + maxCols - 1 };
   }
+  function isPlainNumber(input) {
+    return input !== "" && !input.startsWith("=") && /^[+-]?(\d+\.?\d*|\.\d+)$/.test(input.trim());
+  }
+  function fillRange(sheet2, src, dest) {
+    const down = dest.r0 > src.r1;
+    const laneCount = down ? src.c1 - src.c0 + 1 : src.r1 - src.r0 + 1;
+    const patternLen = down ? src.r1 - src.r0 + 1 : src.c1 - src.c0 + 1;
+    const destLen = down ? dest.r1 - dest.r0 + 1 : dest.c1 - dest.c0 + 1;
+    for (let lane = 0; lane < laneCount; lane++) {
+      const srcAddr = (i) => down ? formatAddr({ col: src.c0 + lane, row: src.r0 + i }) : formatAddr({ col: src.c0 + i, row: src.r0 + lane });
+      const destAddr = (i) => down ? formatAddr({ col: dest.c0 + lane, row: dest.r0 + i }) : formatAddr({ col: dest.c0 + i, row: dest.r0 + lane });
+      const inputs = Array.from({ length: patternLen }, (_, i) => sheet2.getInput(srcAddr(i)));
+      let series = null;
+      if (patternLen >= 2 && inputs.every(isPlainNumber)) {
+        const nums = inputs.map(Number);
+        const step = nums[1] - nums[0];
+        if (nums.every((v, i) => i === 0 || Math.abs(v - nums[i - 1] - step) < 1e-9)) {
+          series = { start: nums[nums.length - 1], step };
+        }
+      }
+      for (let i = 0; i < destLen; i++) {
+        const target = destAddr(i);
+        if (series) {
+          const value = series.start + series.step * (i + 1);
+          sheet2.setCell(target, String(Math.round(value * 1e10) / 1e10));
+        } else {
+          const pi = i % patternLen;
+          let input = inputs[pi];
+          if (input.startsWith("=")) {
+            const from = parseAddr(srcAddr(pi));
+            const to = parseAddr(target);
+            input = "=" + shiftFormula(input.slice(1), to.row - from.row, to.col - from.col);
+          }
+          sheet2.setCell(target, input);
+        }
+        const fmt = sheet2.getFormat(srcAddr(series ? patternLen - 1 : i % patternLen));
+        if (Object.keys(fmt).length > 0) sheet2.setFormat(target, fmt);
+      }
+    }
+  }
 
   // engines/format-conversion/src/zip.ts
   var CRC_TABLE = (() => {
@@ -1312,6 +1352,8 @@
   var editing = false;
   var dragging = false;
   var clip = null;
+  var fillDrag = { src: { r0: 0, c0: 0, r1: 0, c1: 0 }, dest: null };
+  var fillActive = false;
   function selRect() {
     return normalizeRect(selAnchor, selected);
   }
@@ -1430,9 +1472,20 @@
       td.classList.toggle("num", typeof value === "number");
       td.classList.toggle("selected", addr === selected);
       td.classList.toggle("in-range", rangeIsMulti() && inRect(selRect(), a.col, a.row));
+      td.classList.toggle("fill-preview", fillActive && fillDrag.dest !== null && inRect(fillDrag.dest, a.col, a.row));
       td.classList.toggle("bold", fmt.bold === true);
       td.style.textAlign = fmt.align ?? "";
     });
+    gridEl.querySelectorAll(".fill-grip").forEach((el) => el.remove());
+    const rr = selRect();
+    const corner = gridEl.querySelector(
+      `td[data-addr="${formatAddr({ col: rr.c1, row: rr.r1 })}"]`
+    );
+    if (corner && !editing) {
+      const grip = document.createElement("span");
+      grip.className = "fill-grip";
+      corner.appendChild(grip);
+    }
     applyColWidths();
     const r = selRect();
     addrEl.textContent = rangeIsMulti() ? `${formatAddr({ col: r.c0, row: r.r0 })}:${formatAddr({ col: r.c1, row: r.r1 })}` : selected;
@@ -1484,6 +1537,13 @@
     scheduleSave();
   }
   gridEl.addEventListener("pointerdown", (e) => {
+    if (e.target.classList.contains("fill-grip")) {
+      fillActive = true;
+      fillDrag = { src: selRect(), dest: null };
+      e.preventDefault();
+      e.stopPropagation();
+      return;
+    }
     const td = e.target.closest("td[data-addr]");
     if (!td) return;
     select(td.dataset.addr, e.shiftKey);
@@ -1491,11 +1551,39 @@
     e.preventDefault();
   });
   gridEl.addEventListener("pointerover", (e) => {
-    if (!dragging) return;
     const td = e.target.closest("td[data-addr]");
+    if (fillActive) {
+      if (!td) return;
+      const a = parseAddr(td.dataset.addr);
+      const src = fillDrag.src;
+      if (a.row > src.r1) {
+        fillDrag.dest = { r0: src.r1 + 1, c0: src.c0, r1: a.row, c1: src.c1 };
+      } else if (a.col > src.c1) {
+        fillDrag.dest = { r0: src.r0, c0: src.c1 + 1, r1: src.r1, c1: a.col };
+      } else {
+        fillDrag.dest = null;
+      }
+      refreshValues();
+      return;
+    }
+    if (!dragging) return;
     if (td && td.dataset.addr !== selected) select(td.dataset.addr, true);
   });
   document.addEventListener("pointerup", () => {
+    if (fillActive) {
+      fillActive = false;
+      if (fillDrag.dest) {
+        fillRange(sheet, fillDrag.src, fillDrag.dest);
+        selAnchor = formatAddr({ col: fillDrag.src.c0, row: fillDrag.src.r0 });
+        selected = formatAddr({ col: fillDrag.dest.c1, row: fillDrag.dest.r1 });
+        statusEl.textContent = "Filled";
+        scheduleSave();
+      }
+      fillDrag.dest = null;
+      refreshValues();
+      formulaEl.focus();
+      return;
+    }
     if (dragging) {
       dragging = false;
       formulaEl.focus();

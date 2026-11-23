@@ -73,3 +73,29 @@ console.log("SMOKE OK — sheets boot, recalc ripple, formats, autosave");
   assert(formula2.value === "=B10*C10", "pasted formula rebased, got " + formula2.value);
 }
 console.log("SMOKE OK — range select, range format, copy/paste rebasing");
+
+// fill handle: series continuation via grip drag
+{
+  const td = (a) => doc.querySelector(`td[data-addr="${a}"]`);
+  const pdown = (el, opts={}) => el.dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true, cancelable: true, ...opts }));
+  const pup = () => doc.dispatchEvent(new dom.window.MouseEvent("pointerup", { bubbles: true }));
+  // seed a series in F2:F3
+  const formula3 = doc.getElementById("formula");
+  for (const [addr, v] of [["F2","5"],["F3","10"]]) {
+    pdown(td(addr)); pup();
+    formula3.value = v;
+    formula3.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    formula3.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  }
+  pdown(td("F2")); pup();
+  td("F3").dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true, cancelable: true, shiftKey: true }));
+  pup();
+  const grip = doc.querySelector(".fill-grip");
+  assert(grip, "fill grip rendered on selection corner");
+  pdown(grip);
+  td("F6").dispatchEvent(new dom.window.MouseEvent("pointerover", { bubbles: true }));
+  pup();
+  assert(td("F4").textContent === "15" && td("F5").textContent === "20" && td("F6").textContent === "25",
+    `series filled: ${td("F4").textContent},${td("F5").textContent},${td("F6").textContent}`);
+}
+console.log("SMOKE OK — fill handle series");

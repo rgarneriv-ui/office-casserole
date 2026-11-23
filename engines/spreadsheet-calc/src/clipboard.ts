@@ -170,3 +170,67 @@ export function pasteTSV(sheet: Sheet, tsv: string, atAddr: string): Rect {
   });
   return { r0: at.row, c0: at.col, r1: at.row + rows.length - 1, c1: at.col + maxCols - 1 };
 }
+
+// ---------- fill handle (WO-33) ----------
+
+function isPlainNumber(input: string): boolean {
+  return input !== "" && !input.startsWith("=") && /^[+-]?(\d+\.?\d*|\.\d+)$/.test(input.trim());
+}
+
+/**
+ * Fill from a source rectangle into an adjacent extension (below or to the
+ * right, same cross-axis span). Excel-style semantics per lane (column when
+ * filling down, row when filling right):
+ * - two or more plain numbers with a consistent step → arithmetic series
+ * - otherwise the lane's pattern repeats, with formulas shifted by their
+ *   offset from the pattern cell (relative refs move, $ anchors pin)
+ * Formats always travel with their pattern cell.
+ */
+export function fillRange(sheet: Sheet, src: Rect, dest: Rect): void {
+  const down = dest.r0 > src.r1;
+  const laneCount = down ? src.c1 - src.c0 + 1 : src.r1 - src.r0 + 1;
+  const patternLen = down ? src.r1 - src.r0 + 1 : src.c1 - src.c0 + 1;
+  const destLen = down ? dest.r1 - dest.r0 + 1 : dest.c1 - dest.c0 + 1;
+
+  for (let lane = 0; lane < laneCount; lane++) {
+    const srcAddr = (i: number) =>
+      down
+        ? formatAddr({ col: src.c0 + lane, row: src.r0 + i })
+        : formatAddr({ col: src.c0 + i, row: src.r0 + lane });
+    const destAddr = (i: number) =>
+      down
+        ? formatAddr({ col: dest.c0 + lane, row: dest.r0 + i })
+        : formatAddr({ col: dest.c0 + i, row: dest.r0 + lane });
+
+    const inputs = Array.from({ length: patternLen }, (_, i) => sheet.getInput(srcAddr(i)));
+
+    // arithmetic series?
+    let series: { start: number; step: number } | null = null;
+    if (patternLen >= 2 && inputs.every(isPlainNumber)) {
+      const nums = inputs.map(Number);
+      const step = nums[1]! - nums[0]!;
+      if (nums.every((v, i) => i === 0 || Math.abs(v - nums[i - 1]! - step) < 1e-9)) {
+        series = { start: nums[nums.length - 1]!, step };
+      }
+    }
+
+    for (let i = 0; i < destLen; i++) {
+      const target = destAddr(i);
+      if (series) {
+        const value = series.start + series.step * (i + 1);
+        sheet.setCell(target, String(Math.round(value * 1e10) / 1e10));
+      } else {
+        const pi = i % patternLen;
+        let input = inputs[pi]!;
+        if (input.startsWith("=")) {
+          const from = parseAddr(srcAddr(pi))!;
+          const to = parseAddr(target)!;
+          input = "=" + shiftFormula(input.slice(1), to.row - from.row, to.col - from.col);
+        }
+        sheet.setCell(target, input);
+      }
+      const fmt = sheet.getFormat(srcAddr(series ? patternLen - 1 : i % patternLen));
+      if (Object.keys(fmt).length > 0) sheet.setFormat(target, fmt);
+    }
+  }
+}
