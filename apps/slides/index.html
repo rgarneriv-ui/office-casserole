@@ -53,6 +53,8 @@
              justify-content: center; z-index: 50; cursor: pointer; }
   #present .stage { position: relative; background: #fff; overflow: hidden; }
   #present .counter { position: fixed; right: 16px; bottom: 12px; color: #999; font-size: 13px; }
+  .el.line svg { display: block; overflow: visible; }
+  .el.line { background: transparent; }
 </style>
 </head>
 <body>
@@ -64,6 +66,7 @@
     <button id="btn-add-text" title="Add text box">+ Text</button>
     <button id="btn-add-rect" title="Add box">+ Box</button>
     <button id="btn-add-image" title="Insert image from file">+ Image</button>
+    <button id="btn-add-line" title="Add line/connector">+ Line</button>
     <input id="image-open" type="file" accept="image/png,image/jpeg,image/gif" style="display:none" />
     <button id="btn-del-el" title="Delete selected element (Del)">Delete el.</button>
     <button id="btn-undo" title="Undo (Ctrl/Cmd-Z)">↶</button>

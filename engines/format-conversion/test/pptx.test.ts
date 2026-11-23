@@ -219,3 +219,26 @@ test("pptx: ellipse shapes and z-order round-trip", async () => {
   assert.equal(shapes.find((e) => e.fill === "#445566")?.shape, "ellipse", "ellipse imported");
   assert.equal(shapes.find((e) => e.fill === "#112233")?.shape, undefined, "plain rect has no shape variant");
 });
+
+// ---------- lines/connectors (WO-35) ----------
+import { lineElement } from "../../presentation-model/src/model";
+
+test("pptx: lines round-trip as connectors (geometry, direction, stroke, arrow)", async () => {
+  const deck = newDeck();
+  deck.slides[0]!.elements.push(
+    lineElement({ x: 200, y: 150, w: 600, h: 300, stroke: "#aa2222", strokeWidth: 6, arrow: true }),
+    lineElement({ x: 900, y: 150, w: 400, h: 250, dir: "up" })
+  );
+  const out = await exportPptx(deck);
+  const back = await importPptx(out.bytes, parseXml);
+  const lines = back.deck.slides[0]!.elements.filter((e) => e.kind === "line");
+  assert.equal(lines.length, 2);
+  const [a, b] = lines;
+  assert.equal(a!.dir, "down");
+  assert.equal(a!.stroke, "#aa2222");
+  assert.equal(a!.strokeWidth, 6);
+  assert.equal(a!.arrow, true);
+  assert.ok(Math.abs(a!.x - 200) <= 1 && Math.abs(a!.w - 600) <= 1, `geometry survives: x=${a!.x} w=${a!.w}`);
+  assert.equal(b!.dir, "up", "flipV maps to dir up");
+  assert.ok(!b!.arrow);
+});

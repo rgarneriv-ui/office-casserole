@@ -53,6 +53,8 @@
              justify-content: center; z-index: 50; cursor: pointer; }
   #present .stage { position: relative; background: #fff; overflow: hidden; }
   #present .counter { position: fixed; right: 16px; bottom: 12px; color: #999; font-size: 13px; }
+  .el.line svg { display: block; overflow: visible; }
+  .el.line { background: transparent; }
 </style>
 </head>
 <body>
@@ -64,6 +66,7 @@
     <button id="btn-add-text" title="Add text box">+ Text</button>
     <button id="btn-add-rect" title="Add box">+ Box</button>
     <button id="btn-add-image" title="Insert image from file">+ Image</button>
+    <button id="btn-add-line" title="Add line/connector">+ Line</button>
     <input id="image-open" type="file" accept="image/png,image/jpeg,image/gif" style="display:none" />
     <button id="btn-del-el" title="Delete selected element (Del)">Delete el.</button>
     <button id="btn-undo" title="Undo (Ctrl/Cmd-Z)">↶</button>
@@ -129,6 +132,9 @@
   function rectElement(props) {
     return { id: newElemId(), kind: "rect", fill: "#dbe7f0", ...props };
   }
+  function lineElement(props) {
+    return { id: newElemId(), kind: "line", dir: "down", stroke: "#444444", strokeWidth: 4, arrow: false, ...props };
+  }
   function imageElement(src, props) {
     return { id: newElemId(), kind: "image", src, ...props };
   }
@@ -182,8 +188,9 @@
     clampElement(el);
   }
   function clampElement(el) {
-    el.w = Math.max(40, Math.min(el.w, CANVAS_W));
-    el.h = Math.max(40, Math.min(el.h, CANVAS_H));
+    const minSide = el.kind === "line" ? 4 : 40;
+    el.w = Math.max(minSide, Math.min(el.w, CANVAS_W));
+    el.h = Math.max(minSide, Math.min(el.h, CANVAS_H));
     el.x = Math.max(0, Math.min(el.x, CANVAS_W - el.w));
     el.y = Math.max(0, Math.min(el.y, CANVAS_H - el.h));
   }
@@ -198,7 +205,8 @@
       s.elements.forEach((e) => {
         if (ids.has(e.id)) errors.push(`duplicate element id ${e.id}`);
         ids.add(e.id);
-        if (e.kind !== "text" && e.kind !== "rect" && e.kind !== "image") errors.push(`slide ${si}: unknown element kind`);
+        if (e.kind !== "text" && e.kind !== "rect" && e.kind !== "image" && e.kind !== "line")
+          errors.push(`slide ${si}: unknown element kind`);
         if (e.kind === "image" && (typeof e.src !== "string" || !e.src.startsWith("data:image/")))
           errors.push(`slide ${si}: image element without a data:image src`);
         if (e.x < 0 || e.y < 0 || e.x + e.w > CANVAS_W || e.y + e.h > CANVAS_H) {
@@ -464,6 +472,13 @@
       media.slideRels.push({ id: relId, target: `../media/${partName.split("/").pop()}` });
       return `<p:pic><p:nvPicPr><p:cNvPr id="${index + 2}" name="Picture ${index + 1}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="${relId}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>${xfrm}${geom}</p:spPr></p:pic>`;
     }
+    if (el.kind === "line") {
+      const flip = el.dir === "up" ? ` flipV="1"` : "";
+      const lineXfrm = `<a:xfrm${flip}>${off}${ext}</a:xfrm>`;
+      const wEmu = Math.max(1, Math.round((el.strokeWidth ?? 4) * EMU_PER_UNIT));
+      const head = el.arrow ? `<a:tailEnd type="triangle" w="med" len="med"/>` : "";
+      return `<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="${index + 2}" name="Line ${index + 1}"/><p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr><p:spPr>${lineXfrm}<a:prstGeom prst="line"><a:avLst/></a:prstGeom><a:ln w="${wEmu}"><a:solidFill><a:srgbClr val="${hex6(el.stroke, "444444")}"/></a:solidFill>${head}</a:ln></p:spPr></p:cxnSp>`;
+    }
     if (el.kind === "rect") {
       const prst = el.shape === "ellipse" ? "ellipse" : "rect";
       const shapeGeom = `<a:prstGeom prst="${prst}"><a:avLst/></a:prstGeom>`;
@@ -598,6 +613,32 @@
     };
     walk(el);
     return out;
+  }
+  function importConnector(cxn, scale) {
+    const spPr = kid(cxn, "spPr");
+    const xfrm = spPr ? kid(spPr, "xfrm") : null;
+    if (!spPr || !xfrm) return null;
+    const off = kid(xfrm, "off");
+    const extEl = kid(xfrm, "ext");
+    const el = {
+      id: newElemId(),
+      kind: "line",
+      x: Number(off?.getAttribute("x") ?? 0) * scale.x,
+      y: Number(off?.getAttribute("y") ?? 0) * scale.y,
+      w: Number(extEl?.getAttribute("cx") ?? 0) * scale.x,
+      h: Number(extEl?.getAttribute("cy") ?? 0) * scale.y,
+      dir: xfrm.getAttribute("flipV") === "1" ? "up" : "down"
+    };
+    const ln = kid(spPr, "ln");
+    if (ln) {
+      const wAttr = ln.getAttribute("w");
+      if (wAttr) el.strokeWidth = Math.max(1, Math.round(Number(wAttr) / EMU_PER_UNIT));
+      const clr = deep(ln, "srgbClr")[0];
+      if (clr) el.stroke = `#${(clr.getAttribute("val") ?? "444444").toLowerCase()}`;
+      if (kid(ln, "tailEnd")?.getAttribute("type") === "triangle") el.arrow = true;
+    }
+    clampElement(el);
+    return el;
   }
   function importShape(sp, scale, warnings, slideIndex, fallbackSlot) {
     const spPr = kid(sp, "spPr");
@@ -755,6 +796,15 @@
         } else if (child.localName === "pic") {
           const el = importPicture(child, scale, si, warnings, slideRelTargets, byName);
           if (el) slide.elements.push(el);
+        } else if (child.localName === "cxnSp") {
+          const el = importConnector(child, scale);
+          if (el) slide.elements.push(el);
+          else
+            warnings.push({
+              code: "PPTX-IMPORT-CONNECTOR",
+              message: `Slide ${si + 1}: a connector without usable geometry was skipped.`,
+              blockIndex: si
+            });
         } else if (child.localName === "graphicFrame") {
           warnings.push({
             code: "PPTX-IMPORT-GRAPHIC",
@@ -857,6 +907,18 @@
     if (el.kind === "image") {
       return `<div class="el image${selected ? " sel" : ""}" data-id="${el.id}" style="${style}"><img src="${el.src ?? ""}" alt="" draggable="false"/>` + (selected ? `<div class="handle" data-handle="${el.id}"></div>` : "") + `</div>`;
     }
+    if (el.kind === "line") {
+      const sw = Math.max(1, (el.strokeWidth ?? 4) * scale);
+      const stroke = el.stroke ?? "#444444";
+      const up = el.dir === "up";
+      const W = Math.max(1, el.w * scale);
+      const H = Math.max(1, el.h * scale);
+      const y1 = up ? H : 0;
+      const y2 = up ? 0 : H;
+      const mid = `m-${el.id}`;
+      const marker = el.arrow ? `<defs><marker id="${mid}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="${stroke}"/></marker></defs>` : "";
+      return `<div class="el line${selected ? " sel" : ""}" data-id="${el.id}" style="${style}"><svg width="100%" height="100%" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${marker}<line x1="0" y1="${y1}" x2="${W}" y2="${y2}" stroke="${stroke}" stroke-width="${sw}"` + (el.arrow ? ` marker-end="url(#${mid})"` : "") + ` /></svg>` + (selected ? `<div class="handle" data-handle="${el.id}"></div>` : "") + `</div>`;
+    }
     if (el.kind === "rect") {
       const radius = el.shape === "ellipse" ? "border-radius:50%;" : "";
       return `<div class="el rect${selected ? " sel" : ""}" data-id="${el.id}" style="${style}${radius}background:${el.fill ?? "#dbe7f0"}">` + (selected ? `<div class="handle" data-handle="${el.id}"></div>` : "") + `</div>`;
@@ -896,6 +958,8 @@
       propsEl.innerHTML = `<label>Size <input id="p-size" type="number" min="12" max="200" value="${el.size ?? 36}"></label><label><input id="p-bold" type="checkbox" ${el.bold ? "checked" : ""}> Bold</label><label>Align <select id="p-align">` + ["left", "center", "right"].map((a) => `<option ${a === (el.align ?? "left") ? "selected" : ""}>${a}</option>`).join("") + `</select></label><label>Color <input id="p-color" type="color" value="${el.color ?? "#222222"}"></label>`;
     } else if (el.kind === "rect") {
       propsEl.innerHTML = `<label>Fill <input id="p-fill" type="color" value="${el.fill ?? "#dbe7f0"}"></label><label>Shape <select id="p-shape"><option value="rect" ${el.shape !== "ellipse" ? "selected" : ""}>Rectangle</option><option value="ellipse" ${el.shape === "ellipse" ? "selected" : ""}>Ellipse</option></select></label>`;
+    } else if (el.kind === "line") {
+      propsEl.innerHTML = `<label>Stroke <input id="p-stroke" type="color" value="${el.stroke ?? "#444444"}"></label><label>Width <input id="p-strokew" type="number" min="1" max="40" value="${el.strokeWidth ?? 4}"></label><label><input id="p-arrow" type="checkbox" ${el.arrow ? "checked" : ""}> Arrow</label><button id="p-flip" title="Flip direction">\u21F5 Flip</button>`;
     } else {
       propsEl.innerHTML = `<span class="hint">Image \u2014 drag to move, handle to resize</span>`;
     }
@@ -923,6 +987,22 @@
     document.getElementById("p-color")?.addEventListener(
       "change",
       (e) => patch({ color: e.target.value })
+    );
+    document.getElementById("p-stroke")?.addEventListener(
+      "change",
+      (e) => patch({ stroke: e.target.value })
+    );
+    document.getElementById("p-strokew")?.addEventListener(
+      "change",
+      (e) => patch({ strokeWidth: Math.max(1, Number(e.target.value) || 4) })
+    );
+    document.getElementById("p-arrow")?.addEventListener(
+      "change",
+      (e) => patch({ arrow: e.target.checked })
+    );
+    document.getElementById("p-flip")?.addEventListener(
+      "click",
+      () => patch({ dir: el.dir === "up" ? "down" : "up" })
     );
     document.getElementById("p-fill")?.addEventListener(
       "change",
@@ -1126,6 +1206,14 @@
     "click",
     () => cmd(() => {
       const el = rectElement({ x: 500, y: 300, w: 600, h: 300 });
+      addElement(deck, current, el);
+      selectedId = el.id;
+    })
+  );
+  document.getElementById("btn-add-line")?.addEventListener(
+    "click",
+    () => cmd(() => {
+      const el = lineElement({ x: 500, y: 400, w: 600, h: 100, arrow: true });
       addElement(deck, current, el);
       selectedId = el.id;
     })

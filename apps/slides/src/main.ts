@@ -18,6 +18,7 @@ import {
   duplicateSlide,
   imageElement,
   newDeck,
+  lineElement,
   rectElement,
   removeElement,
   reorderElement,
@@ -84,6 +85,28 @@ function elementHtml(el: SlideElement, scale: number, selected: boolean): string
     return (
       `<div class="el image${selected ? " sel" : ""}" data-id="${el.id}" style="${style}">` +
       `<img src="${el.src ?? ""}" alt="" draggable="false"/>` +
+      (selected ? `<div class="handle" data-handle="${el.id}"></div>` : "") +
+      `</div>`
+    );
+  }
+  if (el.kind === "line") {
+    const sw = Math.max(1, (el.strokeWidth ?? 4) * scale);
+    const stroke = el.stroke ?? "#444444";
+    const up = el.dir === "up";
+    const W = Math.max(1, el.w * scale);
+    const H = Math.max(1, el.h * scale);
+    const y1 = up ? H : 0;
+    const y2 = up ? 0 : H;
+    const mid = `m-${el.id}`;
+    const marker = el.arrow
+      ? `<defs><marker id="${mid}" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="${stroke}"/></marker></defs>`
+      : "";
+    return (
+      `<div class="el line${selected ? " sel" : ""}" data-id="${el.id}" style="${style}">` +
+      `<svg width="100%" height="100%" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">${marker}` +
+      `<line x1="0" y1="${y1}" x2="${W}" y2="${y2}" stroke="${stroke}" stroke-width="${sw}"` +
+      (el.arrow ? ` marker-end="url(#${mid})"` : "") +
+      ` /></svg>` +
       (selected ? `<div class="handle" data-handle="${el.id}"></div>` : "") +
       `</div>`
     );
@@ -163,6 +186,12 @@ function renderProps(): void {
       `<option value="rect" ${el.shape !== "ellipse" ? "selected" : ""}>Rectangle</option>` +
       `<option value="ellipse" ${el.shape === "ellipse" ? "selected" : ""}>Ellipse</option>` +
       `</select></label>`;
+  } else if (el.kind === "line") {
+    propsEl.innerHTML =
+      `<label>Stroke <input id="p-stroke" type="color" value="${el.stroke ?? "#444444"}"></label>` +
+      `<label>Width <input id="p-strokew" type="number" min="1" max="40" value="${el.strokeWidth ?? 4}"></label>` +
+      `<label><input id="p-arrow" type="checkbox" ${el.arrow ? "checked" : ""}> Arrow</label>` +
+      `<button id="p-flip" title="Flip direction">⇵ Flip</button>`;
   } else {
     propsEl.innerHTML = `<span class="hint">Image — drag to move, handle to resize</span>`;
   }
@@ -190,6 +219,18 @@ function renderProps(): void {
   );
   (document.getElementById("p-color") as HTMLInputElement | null)?.addEventListener("change", (e) =>
     patch({ color: (e.target as HTMLInputElement).value })
+  );
+  (document.getElementById("p-stroke") as HTMLInputElement | null)?.addEventListener("change", (e) =>
+    patch({ stroke: (e.target as HTMLInputElement).value })
+  );
+  (document.getElementById("p-strokew") as HTMLInputElement | null)?.addEventListener("change", (e) =>
+    patch({ strokeWidth: Math.max(1, Number((e.target as HTMLInputElement).value) || 4) })
+  );
+  (document.getElementById("p-arrow") as HTMLInputElement | null)?.addEventListener("change", (e) =>
+    patch({ arrow: (e.target as HTMLInputElement).checked })
+  );
+  document.getElementById("p-flip")?.addEventListener("click", () =>
+    patch({ dir: el.dir === "up" ? "down" : "up" })
   );
   (document.getElementById("p-fill") as HTMLInputElement | null)?.addEventListener("change", (e) =>
     patch({ fill: (e.target as HTMLInputElement).value })
@@ -410,6 +451,13 @@ document.getElementById("image-open")?.addEventListener("change", (e) => {
 document.getElementById("btn-add-rect")?.addEventListener("click", () =>
   cmd(() => {
     const el = rectElement({ x: 500, y: 300, w: 600, h: 300 });
+    addElement(deck, current, el);
+    selectedId = el.id;
+  })
+);
+document.getElementById("btn-add-line")?.addEventListener("click", () =>
+  cmd(() => {
+    const el = lineElement({ x: 500, y: 400, w: 600, h: 100, arrow: true });
     addElement(deck, current, el);
     selectedId = el.id;
   })

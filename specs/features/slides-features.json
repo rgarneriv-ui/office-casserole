@@ -195,7 +195,7 @@
       "unembeddable src exports as placeholder"
     ],
     "acceptance": [
-      "Export→import round-trips media bytes exactly and preserves geometry",
+      "Export\u2192import round-trips media bytes exactly and preserves geometry",
       "python-pptx sees a PICTURE shape with identical blob",
       "validateDeck rejects image elements without data:image src"
     ],
@@ -221,5 +221,36 @@
     "knownLimitations": [
       "No cropping, aspect lock, or SVG; data URLs grow deck JSON size"
     ]
+  },
+  {
+    "id": "SLIDES-LINE-001",
+    "name": "Lines and connectors",
+    "application": "slides",
+    "description": "Line element drawn corner-to-corner of its box (dir down/up), with stroke color, width and an optional end arrowhead. Renders as SVG; exports to PPTX as p:cxnSp (prstGeom line, flipV for dir up, a:ln width/color, tailEnd triangle) and imports back.",
+    "status": "tested",
+    "owner": "ai",
+    "priority": "P1",
+    "dependencies": [],
+    "commands": [
+      "addElement",
+      "updateElement"
+    ],
+    "acceptance": [
+      "+ Line adds a selectable, draggable, resizable line",
+      "props bar edits stroke/width/arrow and flips direction",
+      "PPTX round-trip preserves geometry (\u00b11 unit), direction, stroke, width, arrow",
+      "python-pptx reads exported connectors with exact EMU geometry"
+    ],
+    "edgeCases": [
+      "thin boxes allowed (min side 4 for lines vs 40 for other elements)",
+      "connector without xfrm geometry skipped with PPTX-IMPORT-CONNECTOR warning"
+    ],
+    "knownLimitations": [
+      "straight lines only (no elbows/curves); no shape-attachment endpoints (free-floating); arrowhead at end only"
+    ],
+    "evidence": "engines/format-conversion/test/pptx.test.ts line round-trip; python-pptx cross-validation; scripts/smoke-slides.mjs line scenario",
+    "verification": "unit + independent python-pptx parse + jsdom smoke; not independently reviewed",
+    "baseline": "PowerPoint connectors (straight subset)",
+    "offlineSupport": true
   }
 ]

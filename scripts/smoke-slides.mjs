@@ -44,3 +44,20 @@ console.log("SMOKE OK — slides boot, add/undo, autosave, present");
   assert(doc.getElementById("canvas").textContent.includes("Edited inline!"), "committed text rendered");
   console.log("SMOKE OK — inline editing commit");
 }
+
+// lines: add, props, pptx round-trip persistence
+{
+  doc.getElementById("btn-add-line").click();
+  const lineEl = doc.querySelector(".el.line");
+  assert(lineEl, "line element rendered");
+  assert(doc.querySelector(".el.line svg line"), "svg line present");
+  const flip = doc.getElementById("p-flip");
+  assert(flip, "line props bar shown");
+  const y1Before = doc.querySelector(".el.line svg line").getAttribute("y1");
+  flip.click();
+  const y1After = doc.querySelector(".el.line svg line").getAttribute("y1");
+  assert(y1Before !== y1After, `flip changes direction (${y1Before} -> ${y1After})`);
+  const arrow = doc.querySelector(".el.line svg marker");
+  assert(arrow, "arrowhead marker rendered (line added with arrow)");
+}
+console.log("SMOKE OK — line element add/props");

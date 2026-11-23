@@ -9,7 +9,7 @@ export const DECK_SCHEMA_VERSION = "1.0";
 export const CANVAS_W = 1600;
 export const CANVAS_H = 900;
 
-export type ElementKind = "text" | "rect" | "image";
+export type ElementKind = "text" | "rect" | "image" | "line";
 export type TextAlign = "left" | "center" | "right";
 
 export interface SlideElement {
@@ -31,6 +31,13 @@ export interface SlideElement {
   shape?: "rect" | "ellipse";
   /** image elements: a data: URL (kept self-contained in the deck) */
   src?: string;
+  /** line elements: the line runs corner-to-corner of the x/y/w/h box —
+   *  "down" = top-left→bottom-right, "up" = bottom-left→top-right */
+  dir?: "down" | "up";
+  stroke?: string;
+  strokeWidth?: number;
+  /** arrowhead at the line's end point */
+  arrow?: boolean;
 }
 
 export interface Slide {
@@ -80,6 +87,10 @@ export function textElement(props: Partial<SlideElement> & Pick<SlideElement, "x
 
 export function rectElement(props: Partial<SlideElement> & Pick<SlideElement, "x" | "y" | "w" | "h">): SlideElement {
   return { id: newElemId(), kind: "rect", fill: "#dbe7f0", ...props };
+}
+
+export function lineElement(props: Partial<SlideElement> & Pick<SlideElement, "x" | "y" | "w" | "h">): SlideElement {
+  return { id: newElemId(), kind: "line", dir: "down", stroke: "#444444", strokeWidth: 4, arrow: false, ...props };
 }
 
 export function imageElement(
@@ -173,8 +184,10 @@ export function updateElement(
 }
 
 export function clampElement(el: SlideElement): void {
-  el.w = Math.max(40, Math.min(el.w, CANVAS_W));
-  el.h = Math.max(40, Math.min(el.h, CANVAS_H));
+  // lines may be near-horizontal/vertical, so their box can be thin
+  const minSide = el.kind === "line" ? 4 : 40;
+  el.w = Math.max(minSide, Math.min(el.w, CANVAS_W));
+  el.h = Math.max(minSide, Math.min(el.h, CANVAS_H));
   el.x = Math.max(0, Math.min(el.x, CANVAS_W - el.w));
   el.y = Math.max(0, Math.min(el.y, CANVAS_H - el.h));
 }
@@ -192,7 +205,8 @@ export function validateDeck(deck: DeckModel): string[] {
     s.elements.forEach((e) => {
       if (ids.has(e.id)) errors.push(`duplicate element id ${e.id}`);
       ids.add(e.id);
-      if (e.kind !== "text" && e.kind !== "rect" && e.kind !== "image") errors.push(`slide ${si}: unknown element kind`);
+      if (e.kind !== "text" && e.kind !== "rect" && e.kind !== "image" && e.kind !== "line")
+        errors.push(`slide ${si}: unknown element kind`);
       if (e.kind === "image" && (typeof e.src !== "string" || !e.src.startsWith("data:image/")))
         errors.push(`slide ${si}: image element without a data:image src`);
       if (e.x < 0 || e.y < 0 || e.x + e.w > CANVAS_W || e.y + e.h > CANVAS_H) {

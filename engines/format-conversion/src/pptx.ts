@@ -106,6 +106,19 @@ function shapeXml(
       `<p:spPr>${xfrm}${geom}</p:spPr></p:pic>`
     );
   }
+  if (el.kind === "line") {
+    const flip = el.dir === "up" ? ` flipV="1"` : "";
+    const lineXfrm = `<a:xfrm${flip}>${off}${ext}</a:xfrm>`;
+    const wEmu = Math.max(1, Math.round((el.strokeWidth ?? 4) * EMU_PER_UNIT));
+    const head = el.arrow ? `<a:tailEnd type="triangle" w="med" len="med"/>` : "";
+    return (
+      `<p:cxnSp><p:nvCxnSpPr><p:cNvPr id="${index + 2}" name="Line ${index + 1}"/>` +
+      `<p:cNvCxnSpPr/><p:nvPr/></p:nvCxnSpPr>` +
+      `<p:spPr>${lineXfrm}<a:prstGeom prst="line"><a:avLst/></a:prstGeom>` +
+      `<a:ln w="${wEmu}"><a:solidFill><a:srgbClr val="${hex6(el.stroke, "444444")}"/></a:solidFill>${head}</a:ln>` +
+      `</p:spPr></p:cxnSp>`
+    );
+  }
   if (el.kind === "rect") {
     const prst = el.shape === "ellipse" ? "ellipse" : "rect";
     const shapeGeom = `<a:prstGeom prst="${prst}"><a:avLst/></a:prstGeom>`;
@@ -353,6 +366,33 @@ function deep(el: Element | Document, name: string): Element[] {
   return out;
 }
 
+function importConnector(cxn: Element, scale: SlideScale): SlideElement | null {
+  const spPr = kid(cxn, "spPr");
+  const xfrm = spPr ? kid(spPr, "xfrm") : null;
+  if (!spPr || !xfrm) return null;
+  const off = kid(xfrm, "off");
+  const extEl = kid(xfrm, "ext");
+  const el: SlideElement = {
+    id: newElemId(),
+    kind: "line",
+    x: Number(off?.getAttribute("x") ?? 0) * scale.x,
+    y: Number(off?.getAttribute("y") ?? 0) * scale.y,
+    w: Number(extEl?.getAttribute("cx") ?? 0) * scale.x,
+    h: Number(extEl?.getAttribute("cy") ?? 0) * scale.y,
+    dir: xfrm.getAttribute("flipV") === "1" ? "up" : "down",
+  };
+  const ln = kid(spPr, "ln");
+  if (ln) {
+    const wAttr = ln.getAttribute("w");
+    if (wAttr) el.strokeWidth = Math.max(1, Math.round(Number(wAttr) / EMU_PER_UNIT));
+    const clr = deep(ln, "srgbClr")[0];
+    if (clr) el.stroke = `#${(clr.getAttribute("val") ?? "444444").toLowerCase()}`;
+    if (kid(ln, "tailEnd")?.getAttribute("type") === "triangle") el.arrow = true;
+  }
+  clampElement(el);
+  return el;
+}
+
 interface SlideScale {
   x: number; // logical units per EMU
   y: number;
@@ -544,6 +584,15 @@ export async function importPptx(
       } else if (child.localName === "pic") {
         const el = importPicture(child, scale, si, warnings, slideRelTargets, byName);
         if (el) slide.elements.push(el);
+      } else if (child.localName === "cxnSp") {
+        const el = importConnector(child, scale);
+        if (el) slide.elements.push(el);
+        else
+          warnings.push({
+            code: "PPTX-IMPORT-CONNECTOR",
+            message: `Slide ${si + 1}: a connector without usable geometry was skipped.`,
+            blockIndex: si,
+          });
       } else if (child.localName === "graphicFrame") {
         warnings.push({
           code: "PPTX-IMPORT-GRAPHIC",
