@@ -32,6 +32,7 @@
            height: 22px; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
   th { background: #eef2ea; color: var(--muted); font-weight: 600; position: sticky; z-index: 1; }
   thead th { top: 0; }
+  .col-grip { position: absolute; right: -3px; top: 0; bottom: 0; width: 7px; cursor: col-resize; z-index: 2; }
   tbody th { left: 0; min-width: 34px; }
   td { cursor: cell; }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
@@ -547,8 +548,20 @@
   var Sheet = class {
     constructor() {
       __publicField(this, "cells", /* @__PURE__ */ new Map());
+      /** column widths in Excel character units (default ≈ 8.43) */
+      __publicField(this, "colWidths", /* @__PURE__ */ new Map());
       /** total formula evaluations — exposed so tests can prove incrementality */
       __publicField(this, "evalCount", 0);
+    }
+    getColWidth(col) {
+      return this.colWidths.get(col);
+    }
+    setColWidth(col, width) {
+      if (width === null || width <= 0) this.colWidths.delete(col);
+      else this.colWidths.set(col, Math.min(120, Math.round(width * 100) / 100));
+    }
+    cols() {
+      return [...this.colWidths.entries()].map(([col, width]) => ({ col, width })).sort((a, b) => a.col - b.col);
     }
     getCell(ref) {
       const key = typeof ref === "string" ? this.keyOf(ref) : addrKey(ref);
@@ -1141,8 +1154,10 @@
     const rowXml = [...rows.entries()].sort((a, b) => a[0] - b[0]).map(
       ([r, cells]) => `<row r="${r + 1}">${cells.sort((a, b) => a.col - b.col).map((c) => c.xml).join("")}</row>`
     ).join("");
+    const colDefs = sheet2.cols();
+    const colsXml = colDefs.length > 0 ? `<cols>${colDefs.map((c) => `<col min="${c.col + 1}" max="${c.col + 1}" width="${c.width}" customWidth="1"/>`).join("")}</cols>` : "";
     const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>${rowXml}</sheetData></worksheet>`;
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">${colsXml}<sheetData>${rowXml}</sheetData></worksheet>`;
     const entries = [
       { name: "[Content_Types].xml", data: textEncoder2.encode(XLSX_CONTENT_TYPES) },
       { name: "_rels/.rels", data: textEncoder2.encode(XLSX_ROOT_RELS) },
@@ -1274,6 +1289,15 @@
     if (!wsName) throw new Error("XLSX package has no worksheet part");
     const ws = parseXml(textDecoder2.decode(byName.get(wsName).data));
     const sheet2 = new Sheet();
+    for (const col of descendants(ws, "col")) {
+      const min = Number(col.getAttribute("min"));
+      const max = Number(col.getAttribute("max"));
+      const width = Number(col.getAttribute("width"));
+      if (!Number.isFinite(min) || !Number.isFinite(width)) continue;
+      for (let c = min; c <= Math.min(max || min, min + 64); c++) {
+        sheet2.setColWidth(c - 1, width);
+      }
+    }
     const pendingFormats = [];
     const formulas = [];
     for (const c of descendants(ws, "c")) {
@@ -1390,7 +1414,7 @@
   var saveTimer = null;
   function save() {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(sheet.entries()));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ cells: sheet.entries(), cols: sheet.cols() }));
       statusEl.textContent = `Saved ${(/* @__PURE__ */ new Date()).toLocaleTimeString()}`;
     } catch {
       statusEl.textContent = "Autosave unavailable \u2014 export CSV to keep your work";
@@ -1404,11 +1428,15 @@
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
       if (!raw) return seed();
-      const entries = JSON.parse(raw);
-      if (entries.length === 0) return seed();
+      const parsed = JSON.parse(raw);
+      const entries = Array.isArray(parsed) ? parsed : parsed.cells;
+      if (!entries || entries.length === 0) return seed();
       for (const e of entries) {
         sheet.setCell(e.addr, e.input);
         if (e.format) sheet.setFormat(e.addr, e.format);
+      }
+      if (!Array.isArray(parsed) && parsed.cols) {
+        for (const c of parsed.cols) sheet.setColWidth(c.col, c.width);
       }
       statusEl.textContent = "Restored sheet";
     } catch {
@@ -1440,9 +1468,26 @@
       sheet.setFormat(a, { bold: true });
     }
   }
+  var CHAR_PX = 7.5;
+  var DEFAULT_W = 76;
+  function colPx(c) {
+    const w = sheet.getColWidth(c);
+    return w ? Math.max(34, Math.round(w * CHAR_PX)) : DEFAULT_W;
+  }
+  function applyColWidths() {
+    gridEl.querySelectorAll("th[data-col]").forEach((th) => {
+      th.style.minWidth = th.style.maxWidth = `${colPx(Number(th.dataset.col))}px`;
+    });
+    gridEl.querySelectorAll("td[data-addr]").forEach((td) => {
+      const c = parseAddr(td.dataset.addr).col;
+      td.style.minWidth = td.style.maxWidth = `${colPx(c)}px`;
+    });
+  }
   function buildGrid() {
     const head = ["<tr><th></th>"];
-    for (let c = 0; c < COLS; c++) head.push(`<th>${colToName(c)}</th>`);
+    for (let c = 0; c < COLS; c++) {
+      head.push(`<th data-col="${c}">${colToName(c)}<span class="col-grip" data-grip="${c}"></span></th>`);
+    }
     head.push("</tr>");
     const rows = [];
     for (let r = 0; r < ROWS; r++) {
@@ -1468,6 +1513,7 @@
       td.classList.toggle("bold", fmt.bold === true);
       td.style.textAlign = fmt.align ?? "";
     });
+    applyColWidths();
     const r = selRect();
     addrEl.textContent = rangeIsMulti() ? `${formatAddr({ col: r.c0, row: r.r0 })}:${formatAddr({ col: r.c1, row: r.r1 })}` : selected;
     if (!editing) formulaEl.value = sheet.getInput(selected);
@@ -1597,6 +1643,27 @@
           });
         }
       }
+    }
+  });
+  var gripDrag = null;
+  gridEl.addEventListener("pointerdown", (e) => {
+    const grip = e.target.closest(".col-grip");
+    if (!grip) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const col = Number(grip.dataset.grip);
+    gripDrag = { col, startX: e.clientX, startPx: colPx(col) };
+  });
+  document.addEventListener("pointermove", (e) => {
+    if (!gripDrag) return;
+    const px = Math.max(34, gripDrag.startPx + (e.clientX - gripDrag.startX));
+    sheet.setColWidth(gripDrag.col, px / CHAR_PX);
+    applyColWidths();
+  });
+  document.addEventListener("pointerup", () => {
+    if (gripDrag) {
+      gripDrag = null;
+      scheduleSave();
     }
   });
   var hostDownloads = null;

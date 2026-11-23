@@ -165,3 +165,18 @@ test("xlsx: foreign styles map by heuristic; unrepresentable aspects warn once",
   assert.ok(styleWarnings[0]!.message.includes("font i"), styleWarnings[0]!.message);
   assert.ok(styleWarnings[0]!.message.includes("border"));
 });
+
+test("xlsx: column widths round-trip through <cols>", async () => {
+  const s = new Sheet();
+  s.setCell("A1", "wide column");
+  s.setColWidth(0, 32.5);
+  s.setColWidth(3, 14);
+  const { bytes } = await exportXlsx(s);
+  const entries = await zipRead(bytes);
+  const ws = new TextDecoder().decode(entries.find((e) => e.name === "xl/worksheets/sheet1.xml")!.data);
+  assert.ok(ws.includes('<col min="1" max="1" width="32.5" customWidth="1"/>'), ws.slice(0, 400));
+  const { sheet } = await importXlsx(bytes, parseXml);
+  assert.equal(sheet.getColWidth(0), 32.5);
+  assert.equal(sheet.getColWidth(3), 14);
+  assert.equal(sheet.getColWidth(1), undefined);
+});

@@ -218,5 +218,67 @@
     "knownLimitations": [
       "No fills, borders, italic, fonts, or column widths yet (dropped with a specific warning on import)"
     ]
+  },
+  {
+    "id": "SHEETS-GRID-002",
+    "application": "casserole-sheets",
+    "name": "Range selection, clipboard, and column widths",
+    "priority": "P0",
+    "description": "Drag/Shift range selection with live label; Ctrl/Cmd-C/X/V with Excel-style relative-formula rebasing ($ anchors pinned, #REF! on out-of-range), formats traveling, TSV interop with the system clipboard where permitted; Delete clears ranges; format controls apply across ranges; drag-to-resize column widths persisted and round-tripped through XLSX cols.",
+    "baseline": {
+      "product": "Microsoft Excel",
+      "capability": "Selection, clipboard, column sizing",
+      "referenceDate": "2026-11",
+      "verificationStatus": "inferred"
+    },
+    "owner": "engines/spreadsheet-calc (clipboard) + apps/sheets",
+    "dependencies": [
+      "SHEETS-CALC-001",
+      "SHEETS-FMT-001"
+    ],
+    "commands": [
+      "selection.extend",
+      "clipboard.copy",
+      "clipboard.cut",
+      "clipboard.paste",
+      "range.clear",
+      "col.resize"
+    ],
+    "offlineSupport": "fully offline",
+    "edgeCases": [
+      "function names like LOG10 not rewritten as refs",
+      "strings in formulas preserved verbatim",
+      "paste clears full destination footprint",
+      "clear keeps formats",
+      "out-of-range shift becomes literal #REF!"
+    ],
+    "acceptance": [
+      "shiftFormula matrix incl. anchors and #REF!",
+      "copy/paste rebases and recomputes at destination; openpyxl reads exported column widths",
+      "smoke: range bold + paste shows rebased formula"
+    ],
+    "verification": {
+      "required": [
+        "unit",
+        "end-to-end",
+        "compatibility"
+      ]
+    },
+    "status": "tested",
+    "evidence": [
+      {
+        "kind": "test-run",
+        "ref": "clipboard.test.ts (5 suites) + cols round-trip; 135 unit total; smoke range scenario",
+        "date": "2026-11-23"
+      },
+      {
+        "kind": "report",
+        "ref": "openpyxl reads exported column width",
+        "date": "2026-11-23"
+      }
+    ],
+    "knownLimitations": [
+      "External paste is values-only TSV and needs clipboard-read permission; no fill handle, row heights, or multi-area selection"
+    ]
   }
 ]

@@ -85,8 +85,25 @@ function parseLiteral(input: string): CellValue {
 
 export class Sheet {
   private cells = new Map<string, Cell>();
+  /** column widths in Excel character units (default ≈ 8.43) */
+  private colWidths = new Map<number, number>();
   /** total formula evaluations — exposed so tests can prove incrementality */
   public evalCount = 0;
+
+  getColWidth(col: number): number | undefined {
+    return this.colWidths.get(col);
+  }
+
+  setColWidth(col: number, width: number | null): void {
+    if (width === null || width <= 0) this.colWidths.delete(col);
+    else this.colWidths.set(col, Math.min(120, Math.round(width * 100) / 100));
+  }
+
+  cols(): { col: number; width: number }[] {
+    return [...this.colWidths.entries()]
+      .map(([col, width]) => ({ col, width }))
+      .sort((a, b) => a.col - b.col);
+  }
 
   getCell(ref: string | Addr): CellValue {
     const key = typeof ref === "string" ? this.keyOf(ref) : addrKey(ref);

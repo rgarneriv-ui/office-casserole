@@ -28,7 +28,8 @@ assert(cell("D2").textContent === "$450.00", "edit ripples through =B2*C2, got "
 assert(cell("D6").textContent === "$661.75", "SUM updated");
 assert(cell("D8").textContent === "YES", "IF flipped");
 await new Promise(r => setTimeout(r, 700));
-const saved = JSON.parse(dom.window.localStorage.getItem("casserole-sheets:v1:default") ?? "[]");
+const savedRaw = JSON.parse(dom.window.localStorage.getItem("casserole-sheets:v1:default") ?? "[]");
+const saved = Array.isArray(savedRaw) ? savedRaw : savedRaw.cells;
 assert(saved.some((e) => e.addr === "B2" && e.input === "100"), "autosave persisted the edit");
 
 assert(cell("A1").classList.contains("bold"), "header cell styled bold");
@@ -38,7 +39,8 @@ doc.dispatchEvent(new dom.window.MouseEvent("pointerup", { bubbles: true }));
 doc.getElementById("btn-bold").dispatchEvent(new dom.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
 assert(cell("A2").classList.contains("bold"), "toolbar bold applied");
 await new Promise(r => setTimeout(r, 700));
-const saved2 = JSON.parse(dom.window.localStorage.getItem("casserole-sheets:v1:default"));
+const saved2Raw = JSON.parse(dom.window.localStorage.getItem("casserole-sheets:v1:default"));
+const saved2 = Array.isArray(saved2Raw) ? saved2Raw : saved2Raw.cells;
 assert(saved2.some(e => e.addr === "A2" && e.format && e.format.bold === true), "format persisted");
 console.log("SMOKE OK — sheets boot, recalc ripple, formats, autosave");
 

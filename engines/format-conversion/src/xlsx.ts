@@ -140,10 +140,17 @@ export async function exportXlsx(sheet: Sheet): Promise<{ bytes: Uint8Array; rep
     )
     .join("");
 
+  const colDefs = sheet.cols();
+  const colsXml =
+    colDefs.length > 0
+      ? `<cols>${colDefs
+          .map((c) => `<col min="${c.col + 1}" max="${c.col + 1}" width="${c.width}" customWidth="1"/>`)
+          .join("")}</cols>`
+      : "";
   const sheetXml =
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
     `<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
-    `<sheetData>${rowXml}</sheetData></worksheet>`;
+    `${colsXml}<sheetData>${rowXml}</sheetData></worksheet>`;
 
   const entries: ZipEntry[] = [
     { name: "[Content_Types].xml", data: textEncoder.encode(XLSX_CONTENT_TYPES) },
@@ -295,6 +302,15 @@ export async function importXlsx(
   const ws = parseXml(textDecoder.decode(byName.get(wsName)!.data));
 
   const sheet = new Sheet();
+  for (const col of descendants(ws, "col")) {
+    const min = Number(col.getAttribute("min"));
+    const max = Number(col.getAttribute("max"));
+    const width = Number(col.getAttribute("width"));
+    if (!Number.isFinite(min) || !Number.isFinite(width)) continue;
+    for (let c = min; c <= Math.min(max || min, min + 64); c++) {
+      sheet.setColWidth(c - 1, width);
+    }
+  }
   const pendingFormats: [string, CellFormat][] = [];
   interface Pending {
     addr: string;

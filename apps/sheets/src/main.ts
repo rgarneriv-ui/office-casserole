@@ -61,7 +61,7 @@ const statusEl = document.getElementById("status") as HTMLElement;
 let saveTimer: number | null = null;
 function save(): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(sheet.entries()));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ cells: sheet.entries(), cols: sheet.cols() }));
     statusEl.textContent = `Saved ${new Date().toLocaleTimeString()}`;
   } catch {
     statusEl.textContent = "Autosave unavailable — export CSV to keep your work";
@@ -75,11 +75,17 @@ function restore(): void {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return seed();
-    const entries = JSON.parse(raw) as { addr: string; input: string; format?: CellFormat }[];
-    if (entries.length === 0) return seed();
+    const parsed = JSON.parse(raw) as
+      | { addr: string; input: string; format?: CellFormat }[]
+      | { cells: { addr: string; input: string; format?: CellFormat }[]; cols?: { col: number; width: number }[] };
+    const entries = Array.isArray(parsed) ? parsed : parsed.cells;
+    if (!entries || entries.length === 0) return seed();
     for (const e of entries) {
       sheet.setCell(e.addr, e.input);
       if (e.format) sheet.setFormat(e.addr, e.format);
+    }
+    if (!Array.isArray(parsed) && parsed.cols) {
+      for (const c of parsed.cols) sheet.setColWidth(c.col, c.width);
     }
     statusEl.textContent = "Restored sheet";
   } catch {
@@ -113,9 +119,29 @@ function seed(): void {
 }
 
 // ---------- rendering ----------
+const CHAR_PX = 7.5; // px per Excel character-width unit at our font size
+const DEFAULT_W = 76;
+
+function colPx(c: number): number {
+  const w = sheet.getColWidth(c);
+  return w ? Math.max(34, Math.round(w * CHAR_PX)) : DEFAULT_W;
+}
+
+function applyColWidths(): void {
+  gridEl.querySelectorAll<HTMLTableCellElement>("th[data-col]").forEach((th) => {
+    th.style.minWidth = th.style.maxWidth = `${colPx(Number(th.dataset.col))}px`;
+  });
+  gridEl.querySelectorAll<HTMLTableCellElement>("td[data-addr]").forEach((td) => {
+    const c = parseAddr(td.dataset.addr!)!.col;
+    td.style.minWidth = td.style.maxWidth = `${colPx(c)}px`;
+  });
+}
+
 function buildGrid(): void {
   const head = ["<tr><th></th>"];
-  for (let c = 0; c < COLS; c++) head.push(`<th>${colToName(c)}</th>`);
+  for (let c = 0; c < COLS; c++) {
+    head.push(`<th data-col="${c}">${colToName(c)}<span class="col-grip" data-grip="${c}"></span></th>`);
+  }
   head.push("</tr>");
   const rows: string[] = [];
   for (let r = 0; r < ROWS; r++) {
@@ -142,6 +168,7 @@ function refreshValues(): void {
     td.classList.toggle("bold", fmt.bold === true);
     td.style.textAlign = fmt.align ?? "";
   });
+  applyColWidths();
   const r = selRect();
   addrEl.textContent = rangeIsMulti()
     ? `${formatAddr({ col: r.c0, row: r.r0 })}:${formatAddr({ col: r.c1, row: r.r1 })}`
@@ -279,6 +306,29 @@ formulaEl.addEventListener("keydown", (e) => {
         });
       }
     }
+  }
+});
+
+// ---------- column resize ----------
+let gripDrag: { col: number; startX: number; startPx: number } | null = null;
+gridEl.addEventListener("pointerdown", (e) => {
+  const grip = (e.target as HTMLElement).closest(".col-grip") as HTMLElement | null;
+  if (!grip) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const col = Number(grip.dataset.grip);
+  gripDrag = { col, startX: e.clientX, startPx: colPx(col) };
+});
+document.addEventListener("pointermove", (e) => {
+  if (!gripDrag) return;
+  const px = Math.max(34, gripDrag.startPx + (e.clientX - gripDrag.startX));
+  sheet.setColWidth(gripDrag.col, px / CHAR_PX);
+  applyColWidths();
+});
+document.addEventListener("pointerup", () => {
+  if (gripDrag) {
+    gripDrag = null;
+    scheduleSave();
   }
 });
 
