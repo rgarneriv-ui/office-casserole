@@ -132,12 +132,17 @@ export async function exportXlsx(sheet: Sheet): Promise<{ bytes: Uint8Array; rep
     if (!rows.has(a.row)) rows.set(a.row, []);
     rows.get(a.row)!.push({ col: a.col, xml });
   }
+  // rows with a custom height but no cells still need a <row> element
+  for (const { row } of sheet.rows()) {
+    if (!rows.has(row)) rows.set(row, []);
+  }
   const rowXml = [...rows.entries()]
     .sort((a, b) => a[0] - b[0])
-    .map(
-      ([r, cells]) =>
-        `<row r="${r + 1}">${cells.sort((a, b) => a.col - b.col).map((c) => c.xml).join("")}</row>`
-    )
+    .map(([r, cells]) => {
+      const ht = sheet.getRowHeight(r);
+      const htAttr = ht ? ` ht="${ht}" customHeight="1"` : "";
+      return `<row r="${r + 1}"${htAttr}>${cells.sort((a, b) => a.col - b.col).map((c) => c.xml).join("")}</row>`;
+    })
     .join("");
 
   const colDefs = sheet.cols();
@@ -310,6 +315,12 @@ export async function importXlsx(
     for (let c = min; c <= Math.min(max || min, min + 64); c++) {
       sheet.setColWidth(c - 1, width);
     }
+  }
+  for (const row of descendants(ws, "row")) {
+    if (row.getAttribute("customHeight") !== "1") continue;
+    const r = Number(row.getAttribute("r"));
+    const ht = Number(row.getAttribute("ht"));
+    if (Number.isFinite(r) && Number.isFinite(ht) && r >= 1) sheet.setRowHeight(r - 1, ht);
   }
   const pendingFormats: [string, CellFormat][] = [];
   interface Pending {

@@ -470,6 +470,8 @@
       __publicField(this, "cells", /* @__PURE__ */ new Map());
       /** column widths in Excel character units (default ≈ 8.43) */
       __publicField(this, "colWidths", /* @__PURE__ */ new Map());
+      /** row heights in points (default ≈ 15) */
+      __publicField(this, "rowHeights", /* @__PURE__ */ new Map());
       /** total formula evaluations — exposed so tests can prove incrementality */
       __publicField(this, "evalCount", 0);
     }
@@ -482,6 +484,16 @@
     }
     cols() {
       return [...this.colWidths.entries()].map(([col, width]) => ({ col, width })).sort((a, b) => a.col - b.col);
+    }
+    getRowHeight(row) {
+      return this.rowHeights.get(row);
+    }
+    setRowHeight(row, height) {
+      if (height === null || height <= 0) this.rowHeights.delete(row);
+      else this.rowHeights.set(row, Math.min(300, Math.round(height * 100) / 100));
+    }
+    rows() {
+      return [...this.rowHeights.entries()].map(([row, height]) => ({ row, height })).sort((a, b) => a.row - b.row);
     }
     getCell(ref) {
       const key = typeof ref === "string" ? this.keyOf(ref) : addrKey(ref);
@@ -1111,9 +1123,14 @@
       if (!rows.has(a.row)) rows.set(a.row, []);
       rows.get(a.row).push({ col: a.col, xml });
     }
-    const rowXml = [...rows.entries()].sort((a, b) => a[0] - b[0]).map(
-      ([r, cells]) => `<row r="${r + 1}">${cells.sort((a, b) => a.col - b.col).map((c) => c.xml).join("")}</row>`
-    ).join("");
+    for (const { row } of sheet2.rows()) {
+      if (!rows.has(row)) rows.set(row, []);
+    }
+    const rowXml = [...rows.entries()].sort((a, b) => a[0] - b[0]).map(([r, cells]) => {
+      const ht = sheet2.getRowHeight(r);
+      const htAttr = ht ? ` ht="${ht}" customHeight="1"` : "";
+      return `<row r="${r + 1}"${htAttr}>${cells.sort((a, b) => a.col - b.col).map((c) => c.xml).join("")}</row>`;
+    }).join("");
     const colDefs = sheet2.cols();
     const colsXml = colDefs.length > 0 ? `<cols>${colDefs.map((c) => `<col min="${c.col + 1}" max="${c.col + 1}" width="${c.width}" customWidth="1"/>`).join("")}</cols>` : "";
     const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
@@ -1258,6 +1275,12 @@
         sheet2.setColWidth(c - 1, width);
       }
     }
+    for (const row of descendants(ws, "row")) {
+      if (row.getAttribute("customHeight") !== "1") continue;
+      const r = Number(row.getAttribute("r"));
+      const ht = Number(row.getAttribute("ht"));
+      if (Number.isFinite(r) && Number.isFinite(ht) && r >= 1) sheet2.setRowHeight(r - 1, ht);
+    }
     const pendingFormats = [];
     const formulas = [];
     for (const c of descendants(ws, "c")) {
@@ -1376,7 +1399,7 @@
   var saveTimer = null;
   function save() {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify({ cells: sheet.entries(), cols: sheet.cols() }));
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ cells: sheet.entries(), cols: sheet.cols(), rows: sheet.rows() }));
       statusEl.textContent = `Saved ${(/* @__PURE__ */ new Date()).toLocaleTimeString()}`;
     } catch {
       statusEl.textContent = "Autosave unavailable \u2014 export CSV to keep your work";
@@ -1399,6 +1422,9 @@
       }
       if (!Array.isArray(parsed) && parsed.cols) {
         for (const c of parsed.cols) sheet.setColWidth(c.col, c.width);
+      }
+      if (!Array.isArray(parsed) && parsed.rows) {
+        for (const r of parsed.rows) sheet.setRowHeight(r.row, r.height);
       }
       statusEl.textContent = "Restored sheet";
     } catch {
@@ -1436,6 +1462,19 @@
     const w = sheet.getColWidth(c);
     return w ? Math.max(34, Math.round(w * CHAR_PX)) : DEFAULT_W;
   }
+  var PT_PX = 4 / 3;
+  var DEFAULT_ROW_PX = 24;
+  function rowPx(r) {
+    const h = sheet.getRowHeight(r);
+    return h ? Math.max(16, Math.round(h * PT_PX)) : DEFAULT_ROW_PX;
+  }
+  function applyRowHeights() {
+    gridEl.querySelectorAll("th[data-row]").forEach((th) => {
+      const h = `${rowPx(Number(th.dataset.row))}px`;
+      const tr = th.parentElement;
+      tr.style.height = h;
+    });
+  }
   function applyColWidths() {
     gridEl.querySelectorAll("th[data-col]").forEach((th) => {
       th.style.minWidth = th.style.maxWidth = `${colPx(Number(th.dataset.col))}px`;
@@ -1453,7 +1492,7 @@
     head.push("</tr>");
     const rows = [];
     for (let r = 0; r < ROWS; r++) {
-      const cells = [`<th>${r + 1}</th>`];
+      const cells = [`<th data-row="${r}">${r + 1}<span class="row-grip" data-rowgrip="${r}"></span></th>`];
       for (let c = 0; c < COLS; c++) {
         cells.push(`<td data-addr="${formatAddr({ col: c, row: r })}"></td>`);
       }
@@ -1487,6 +1526,7 @@
       corner.appendChild(grip);
     }
     applyColWidths();
+    applyRowHeights();
     const r = selRect();
     addrEl.textContent = rangeIsMulti() ? `${formatAddr({ col: r.c0, row: r.r0 })}:${formatAddr({ col: r.c1, row: r.r1 })}` : selected;
     if (!editing) formulaEl.value = sheet.getInput(selected);
@@ -1654,7 +1694,16 @@
     }
   });
   var gripDrag = null;
+  var rowGripDrag = null;
   gridEl.addEventListener("pointerdown", (e) => {
+    const rowGrip = e.target.closest(".row-grip");
+    if (rowGrip) {
+      e.preventDefault();
+      e.stopPropagation();
+      const row = Number(rowGrip.dataset.rowgrip);
+      rowGripDrag = { row, startY: e.clientY, startPx: rowPx(row) };
+      return;
+    }
     const grip = e.target.closest(".col-grip");
     if (!grip) return;
     e.preventDefault();
@@ -1663,12 +1712,22 @@
     gripDrag = { col, startX: e.clientX, startPx: colPx(col) };
   });
   document.addEventListener("pointermove", (e) => {
+    if (rowGripDrag) {
+      const px2 = Math.max(16, rowGripDrag.startPx + (e.clientY - rowGripDrag.startY));
+      sheet.setRowHeight(rowGripDrag.row, px2 / PT_PX);
+      applyRowHeights();
+      return;
+    }
     if (!gripDrag) return;
     const px = Math.max(34, gripDrag.startPx + (e.clientX - gripDrag.startX));
     sheet.setColWidth(gripDrag.col, px / CHAR_PX);
     applyColWidths();
   });
   document.addEventListener("pointerup", () => {
+    if (rowGripDrag) {
+      rowGripDrag = null;
+      scheduleSave();
+    }
     if (gripDrag) {
       gripDrag = null;
       scheduleSave();

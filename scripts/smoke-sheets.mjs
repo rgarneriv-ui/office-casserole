@@ -99,3 +99,19 @@ console.log("SMOKE OK — range select, range format, copy/paste rebasing");
     `series filled: ${td("F4").textContent},${td("F5").textContent},${td("F6").textContent}`);
 }
 console.log("SMOKE OK — fill handle series");
+
+// row heights: grip drag resizes and persists
+{
+  const rowGrip = doc.querySelector('.row-grip[data-rowgrip="1"]');
+  assert(rowGrip, "row grip rendered");
+  const tr = rowGrip.closest("tr");
+  rowGrip.dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true, cancelable: true, clientY: 100 }));
+  doc.dispatchEvent(new dom.window.MouseEvent("pointermove", { bubbles: true, clientY: 130 }));
+  doc.dispatchEvent(new dom.window.MouseEvent("pointerup", { bubbles: true }));
+  assert(tr.style.height === "54px", `row resized to ${tr.style.height} (expected 54px = 24 default + 30 drag)`);
+  await new Promise((r) => setTimeout(r, 700)); // debounced save
+  const key = Object.keys(dom.window.localStorage).find((k) => k.includes("sheet"));
+  const stored = JSON.parse(dom.window.localStorage.getItem(key));
+  assert(Array.isArray(stored.rows) && stored.rows.some((r) => r.row === 1), "row height persisted");
+}
+console.log("SMOKE OK — row heights");

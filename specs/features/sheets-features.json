@@ -314,5 +314,34 @@
     "verification": "unit + jsdom smoke; not independently reviewed",
     "baseline": "Excel/Sheets fill handle (subset)",
     "offlineSupport": true
+  },
+  {
+    "id": "SHEETS-ROWHT-001",
+    "name": "Row heights",
+    "application": "sheets",
+    "description": "Per-row custom heights (points, capped at 300): engine store mirroring column widths, drag the bottom edge of a row header to resize, persisted with the sheet, and round-tripped through XLSX as <row ht customHeight> including empty rows.",
+    "status": "tested",
+    "owner": "ai",
+    "priority": "P2",
+    "dependencies": [],
+    "commands": [
+      "setRowHeight"
+    ],
+    "acceptance": [
+      "drag resizes the row live and persists after reload",
+      "XLSX round-trip keeps heights, including rows with no cells",
+      "openpyxl reads exported heights exactly"
+    ],
+    "edgeCases": [
+      "heights rounded to 2 decimals, capped at 300pt, min 16px in the UI",
+      "rows without customHeight ignored on import"
+    ],
+    "knownLimitations": [
+      "no auto-fit to content; no multi-row resize in one drag"
+    ],
+    "evidence": "engines/spreadsheet-calc/test/engine.test.ts; engines/format-conversion/test/xlsx.test.ts row-height round-trip; openpyxl cross-validation; scripts/smoke-sheets.mjs row-height scenario",
+    "verification": "unit + independent openpyxl parse + jsdom smoke; not independently reviewed",
+    "baseline": "Excel row heights (manual resize subset)",
+    "offlineSupport": true
   }
 ]

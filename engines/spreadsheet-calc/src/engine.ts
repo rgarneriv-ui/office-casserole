@@ -87,6 +87,8 @@ export class Sheet {
   private cells = new Map<string, Cell>();
   /** column widths in Excel character units (default ≈ 8.43) */
   private colWidths = new Map<number, number>();
+  /** row heights in points (default ≈ 15) */
+  private rowHeights = new Map<number, number>();
   /** total formula evaluations — exposed so tests can prove incrementality */
   public evalCount = 0;
 
@@ -103,6 +105,21 @@ export class Sheet {
     return [...this.colWidths.entries()]
       .map(([col, width]) => ({ col, width }))
       .sort((a, b) => a.col - b.col);
+  }
+
+  getRowHeight(row: number): number | undefined {
+    return this.rowHeights.get(row);
+  }
+
+  setRowHeight(row: number, height: number | null): void {
+    if (height === null || height <= 0) this.rowHeights.delete(row);
+    else this.rowHeights.set(row, Math.min(300, Math.round(height * 100) / 100));
+  }
+
+  rows(): { row: number; height: number }[] {
+    return [...this.rowHeights.entries()]
+      .map(([row, height]) => ({ row, height }))
+      .sort((a, b) => a.row - b.row);
   }
 
   getCell(ref: string | Addr): CellValue {

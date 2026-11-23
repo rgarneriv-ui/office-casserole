@@ -64,7 +64,7 @@ const statusEl = document.getElementById("status") as HTMLElement;
 let saveTimer: number | null = null;
 function save(): void {
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ cells: sheet.entries(), cols: sheet.cols() }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ cells: sheet.entries(), cols: sheet.cols(), rows: sheet.rows() }));
     statusEl.textContent = `Saved ${new Date().toLocaleTimeString()}`;
   } catch {
     statusEl.textContent = "Autosave unavailable — export CSV to keep your work";
@@ -80,7 +80,7 @@ function restore(): void {
     if (!raw) return seed();
     const parsed = JSON.parse(raw) as
       | { addr: string; input: string; format?: CellFormat }[]
-      | { cells: { addr: string; input: string; format?: CellFormat }[]; cols?: { col: number; width: number }[] };
+      | { cells: { addr: string; input: string; format?: CellFormat }[]; cols?: { col: number; width: number }[]; rows?: { row: number; height: number }[] };
     const entries = Array.isArray(parsed) ? parsed : parsed.cells;
     if (!entries || entries.length === 0) return seed();
     for (const e of entries) {
@@ -89,6 +89,9 @@ function restore(): void {
     }
     if (!Array.isArray(parsed) && parsed.cols) {
       for (const c of parsed.cols) sheet.setColWidth(c.col, c.width);
+    }
+    if (!Array.isArray(parsed) && parsed.rows) {
+      for (const r of parsed.rows) sheet.setRowHeight(r.row, r.height);
     }
     statusEl.textContent = "Restored sheet";
   } catch {
@@ -130,6 +133,22 @@ function colPx(c: number): number {
   return w ? Math.max(34, Math.round(w * CHAR_PX)) : DEFAULT_W;
 }
 
+const PT_PX = 4 / 3; // px per point at 96dpi
+const DEFAULT_ROW_PX = 24;
+
+function rowPx(r: number): number {
+  const h = sheet.getRowHeight(r);
+  return h ? Math.max(16, Math.round(h * PT_PX)) : DEFAULT_ROW_PX;
+}
+
+function applyRowHeights(): void {
+  gridEl.querySelectorAll<HTMLTableCellElement>("th[data-row]").forEach((th) => {
+    const h = `${rowPx(Number(th.dataset.row))}px`;
+    const tr = th.parentElement as HTMLTableRowElement;
+    tr.style.height = h;
+  });
+}
+
 function applyColWidths(): void {
   gridEl.querySelectorAll<HTMLTableCellElement>("th[data-col]").forEach((th) => {
     th.style.minWidth = th.style.maxWidth = `${colPx(Number(th.dataset.col))}px`;
@@ -148,7 +167,7 @@ function buildGrid(): void {
   head.push("</tr>");
   const rows: string[] = [];
   for (let r = 0; r < ROWS; r++) {
-    const cells = [`<th>${r + 1}</th>`];
+    const cells = [`<th data-row="${r}">${r + 1}<span class="row-grip" data-rowgrip="${r}"></span></th>`];
     for (let c = 0; c < COLS; c++) {
       cells.push(`<td data-addr="${formatAddr({ col: c, row: r })}"></td>`);
     }
@@ -184,6 +203,7 @@ function refreshValues(): void {
     corner.appendChild(grip);
   }
   applyColWidths();
+  applyRowHeights();
   const r = selRect();
   addrEl.textContent = rangeIsMulti()
     ? `${formatAddr({ col: r.c0, row: r.r0 })}:${formatAddr({ col: r.c1, row: r.r1 })}`
@@ -363,7 +383,16 @@ formulaEl.addEventListener("keydown", (e) => {
 
 // ---------- column resize ----------
 let gripDrag: { col: number; startX: number; startPx: number } | null = null;
+let rowGripDrag: { row: number; startY: number; startPx: number } | null = null;
 gridEl.addEventListener("pointerdown", (e) => {
+  const rowGrip = (e.target as HTMLElement).closest(".row-grip") as HTMLElement | null;
+  if (rowGrip) {
+    e.preventDefault();
+    e.stopPropagation();
+    const row = Number(rowGrip.dataset.rowgrip);
+    rowGripDrag = { row, startY: e.clientY, startPx: rowPx(row) };
+    return;
+  }
   const grip = (e.target as HTMLElement).closest(".col-grip") as HTMLElement | null;
   if (!grip) return;
   e.preventDefault();
@@ -372,12 +401,22 @@ gridEl.addEventListener("pointerdown", (e) => {
   gripDrag = { col, startX: e.clientX, startPx: colPx(col) };
 });
 document.addEventListener("pointermove", (e) => {
+  if (rowGripDrag) {
+    const px = Math.max(16, rowGripDrag.startPx + (e.clientY - rowGripDrag.startY));
+    sheet.setRowHeight(rowGripDrag.row, px / PT_PX);
+    applyRowHeights();
+    return;
+  }
   if (!gripDrag) return;
   const px = Math.max(34, gripDrag.startPx + (e.clientX - gripDrag.startX));
   sheet.setColWidth(gripDrag.col, px / CHAR_PX);
   applyColWidths();
 });
 document.addEventListener("pointerup", () => {
+  if (rowGripDrag) {
+    rowGripDrag = null;
+    scheduleSave();
+  }
   if (gripDrag) {
     gripDrag = null;
     scheduleSave();

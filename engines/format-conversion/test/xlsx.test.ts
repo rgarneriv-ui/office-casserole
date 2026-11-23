@@ -180,3 +180,16 @@ test("xlsx: column widths round-trip through <cols>", async () => {
   assert.equal(sheet.getColWidth(3), 14);
   assert.equal(sheet.getColWidth(1), undefined);
 });
+
+// ---------- row heights (WO-36) ----------
+test("xlsx: custom row heights round-trip (including empty rows)", async () => {
+  const s = new Sheet();
+  s.setCell("A1", "x");
+  s.setRowHeight(0, 30);
+  s.setRowHeight(4, 45.5); // no cells in row 5
+  const out = await exportXlsx(s);
+  const back = await importXlsx(out.bytes, parseXml);
+  assert.equal(back.sheet.getRowHeight(0), 30);
+  assert.equal(back.sheet.getRowHeight(4), 45.5, "empty row with custom height survives");
+  assert.equal(back.sheet.getRowHeight(1), undefined, "default rows untouched");
+});
