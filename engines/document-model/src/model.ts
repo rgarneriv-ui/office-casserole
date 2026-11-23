@@ -45,7 +45,7 @@ export function marksEqual(a: Mark[], b: Mark[]): boolean {
 }
 
 export function sortMarks(marks: Mark[]): Mark[] {
-  const order: Mark[] = ["bold", "italic", "underline"];
+  const order: Mark[] = ["bold", "italic", "underline", "strike"];
   return order.filter((m) => marks.includes(m));
 }
 

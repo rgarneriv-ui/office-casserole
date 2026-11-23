@@ -59,6 +59,7 @@ function runsHtml(block: { runs: { text: string; marks: string[] }[] }): string 
         if (run.marks.includes("bold")) html = `<strong>${html}</strong>`;
         if (run.marks.includes("italic")) html = `<em>${html}</em>`;
         if (run.marks.includes("underline")) html = `<u>${html}</u>`;
+        if (run.marks.includes("strike")) html = `<s>${html}</s>`;
         return html;
       })
       .join("") || "<br>"
@@ -186,6 +187,7 @@ export function toMarkdown(model: DocModel): { markdown: string; report: LossRep
         let md = escapeMd(run.text);
         if (run.marks.includes("bold")) md = `**${md}**`;
         if (run.marks.includes("italic")) md = `*${md}*`;
+        if (run.marks.includes("strike")) md = `~~${md}~~`; // GFM strikethrough
         if (run.marks.includes("underline")) {
           warnings.push({
             code: "MD-UNDERLINE-LOST",

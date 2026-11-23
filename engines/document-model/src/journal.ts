@@ -50,7 +50,7 @@ function isRuns(v: unknown): v is TextRun[] {
         r !== null &&
         typeof (r as TextRun).text === "string" &&
         Array.isArray((r as TextRun).marks) &&
-        (r as TextRun).marks.every((m) => ["bold", "italic", "underline"].includes(m))
+        (r as TextRun).marks.every((m) => ["bold", "italic", "underline", "strike"].includes(m))
     )
   );
 }

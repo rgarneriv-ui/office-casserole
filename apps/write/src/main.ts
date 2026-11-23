@@ -406,7 +406,7 @@ function renderCodes(): void {
 
 function updateToolbar(): void {
   const collapsed = isCollapsed(selection);
-  (["bold", "italic", "underline"] as Mark[]).forEach((m) => {
+  (["bold", "italic", "underline", "strike"] as Mark[]).forEach((m) => {
     const btn = document.getElementById(`btn-${m}`);
     if (!btn) return;
     const active = collapsed
@@ -656,7 +656,7 @@ document.addEventListener("selectionchange", () => {
 });
 
 // ---------- toolbar ----------
-(["bold", "italic", "underline"] as Mark[]).forEach((m) => {
+(["bold", "italic", "underline", "strike"] as Mark[]).forEach((m) => {
   document.getElementById(`btn-${m}`)?.addEventListener("mousedown", (e) => {
     e.preventDefault(); // keep editor selection
     readSelection();
@@ -1576,7 +1576,7 @@ buildRibbon(
             { kind: "move", id: "btn-bold" },
             { kind: "move", id: "btn-italic" },
             { kind: "move", id: "btn-underline" },
-            { kind: "ph", label: "ab", icon: "S̶" },
+            { kind: "move", id: "btn-strike" },
             { kind: "ph", label: "x₂" },
             { kind: "ph", label: "x²" },
             { kind: "ph", label: "A", icon: "🖍" },

@@ -4,7 +4,7 @@
  * ADR-0002 records the scope of this subset and the path to the full model.
  */
 
-export type Mark = "bold" | "italic" | "underline";
+export type Mark = "bold" | "italic" | "underline" | "strike";
 
 export type BlockType = "paragraph" | "heading1" | "heading2" | "bullet" | "numbered" | "table";
 

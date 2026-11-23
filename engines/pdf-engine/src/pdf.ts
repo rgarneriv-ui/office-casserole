@@ -73,6 +73,7 @@ interface Span {
   text: string;
   font: FontKey;
   underline: boolean;
+  strike?: boolean;
 }
 
 interface Line {
@@ -123,7 +124,7 @@ function wrapBlock(
     const out: Span[] = [];
     for (const s of list) {
       const prev = out[out.length - 1];
-      if (prev && prev.font === s.font && prev.underline === s.underline) prev.text += s.text;
+      if (prev && prev.font === s.font && prev.underline === s.underline && !!prev.strike === !!s.strike) prev.text += s.text;
       else out.push({ ...s });
     }
     const last = out[out.length - 1];
@@ -309,6 +310,7 @@ export function exportPdf(
             text: sanitize(r.text, warnings, bi),
             font: fontFor(r.marks, forceBold),
             underline: r.marks.includes("underline"),
+            strike: r.marks.includes("strike"),
           }))
         : [{ text: "", font: forceBold ? "B" : "R", underline: false }];
     const indent = isList ? LIST_INDENT * (level + 1) : 0;
@@ -361,6 +363,13 @@ export function exportPdf(
           const uy = ly - 1.5;
           ops.push(
             `${x.toFixed(2)} ${uy.toFixed(2)} m ${(x + w).toFixed(2)} ${uy.toFixed(2)} l 0.5 w S`
+          );
+        }
+        if (span.strike) {
+          // mid x-height strike, like Word's single strikethrough
+          const sy = ly + line.size * 0.27;
+          ops.push(
+            `${x.toFixed(2)} ${sy.toFixed(2)} m ${(x + w).toFixed(2)} ${sy.toFixed(2)} l 0.5 w S`
           );
         }
         x += w;

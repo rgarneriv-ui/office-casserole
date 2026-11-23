@@ -98,3 +98,13 @@ test("explainAt names the block type and active formatting", () => {
   assert.ok(msg.includes("Bold"));
   assert.ok(msg.includes("Para"));
 });
+
+// ---------- strikethrough (WO-40) ----------
+test("serialize: strike as <s> in HTML and ~~ in Markdown", () => {
+  const b = newBlock("paragraph");
+  b.runs = [{ text: "gone", marks: ["strike"] }];
+  const model: DocModel = { schemaVersion: SCHEMA_VERSION, blocks: [b] };
+  assert.ok(toHTML(model).includes("<s>gone</s>"));
+  const { markdown } = toMarkdown(model);
+  assert.ok(markdown.includes("~~gone~~"), markdown);
+});

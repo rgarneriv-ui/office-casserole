@@ -44,6 +44,7 @@ function runXml(text: string, marks: Mark[]): string {
   if (marks.includes("bold")) props.push("<w:b/>");
   if (marks.includes("italic")) props.push("<w:i/>");
   if (marks.includes("underline")) props.push('<w:u w:val="single"/>');
+  if (marks.includes("strike")) props.push("<w:strike/>");
   const rPr = props.length ? `<w:rPr>${props.join("")}</w:rPr>` : "";
   return `<w:r>${rPr}<w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r>`;
 }
@@ -573,6 +574,7 @@ function importParagraph(
           if (prop.localName === "b" && !off) marks.push("bold");
           else if (prop.localName === "i" && !off) marks.push("italic");
           else if (prop.localName === "u" && !off) marks.push("underline");
+          else if (prop.localName === "strike" && !off) marks.push("strike");
           else if (!["b", "i", "u", "rFonts", "sz", "szCs", "lang", "noProof"].includes(prop.localName)) {
             warnings.push({
               code: "DOCX-IMPORT-RUN-PROP",

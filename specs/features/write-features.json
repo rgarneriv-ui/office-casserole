@@ -872,5 +872,35 @@
     "verification": "jsdom smoke; not independently reviewed",
     "baseline": "Microsoft Office ribbon (structure + implemented-command subset)",
     "offlineSupport": true
+  },
+  {
+    "id": "WRITE-STRIKE-001",
+    "name": "Strikethrough mark",
+    "application": "write",
+    "description": "Fourth character mark, live end-to-end: ribbon Font-group toggle (caret + range), editor rendering, journal/OT (rides replace-runs like any mark), DOCX w:strike round-trip, HTML <s>, GFM ~~, PDF mid-x-height rule per span.",
+    "status": "tested",
+    "owner": "ai",
+    "priority": "P2",
+    "dependencies": [],
+    "commands": [
+      "toggleMark"
+    ],
+    "acceptance": [
+      "DOCX round-trip keeps strike (alone and combined with bold)",
+      "HTML <s> and Markdown ~~ emitted",
+      "PDF draws exactly one rule per struck span (pypdf-verified)",
+      "ribbon toggle arms caret marks"
+    ],
+    "edgeCases": [
+      "underline+strike combine via text-decoration in the editor",
+      "PDF span coalescing keys on strike too"
+    ],
+    "knownLimitations": [
+      "single strikethrough only (no double-strike)"
+    ],
+    "evidence": "docx/serialize test suites; pypdf cross-validation; scripts/smoke-write.mjs scenario 9",
+    "verification": "unit + independent pypdf parse + jsdom smoke; not independently reviewed",
+    "baseline": "Word strikethrough",
+    "offlineSupport": true
   }
 ]

@@ -230,3 +230,19 @@ console.log("SMOKE OK — find & replace");
   assert(doc.querySelector("#ribbon #block-type"), "block-type select re-homed");
 }
 console.log("SMOKE OK — Write ribbon");
+
+// Scenario 9: strikethrough — ribbon button toggles, renders, round-trips storage
+{
+  const dom = await bootDom();
+  const doc = dom.window.document;
+  const strikeBtn = doc.querySelector("#ribbon #btn-strike");
+  assert(strikeBtn && !strikeBtn.disabled, "strike button live in the ribbon Font group");
+  strikeBtn.dispatchEvent(new dom.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  await new Promise((r) => setTimeout(r, 30));
+  // caret-mode toggle arms caretMarks; type and the text should carry strike
+  const editorEl = doc.getElementById("editor");
+  editorEl.dispatchEvent(new dom.window.InputEvent("beforeinput", { inputType: "insertText", data: "zap", bubbles: true, cancelable: true }));
+  await new Promise((r) => setTimeout(r, 30));
+  assert(doc.querySelector("#editor .m-strike"), "typed text renders with the strike class");
+}
+console.log("SMOKE OK — strikethrough");

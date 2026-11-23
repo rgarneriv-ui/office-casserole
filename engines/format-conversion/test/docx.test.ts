@@ -365,3 +365,19 @@ test("docx preserve: an edited paragraph regenerates and reports the drop", asyn
   assert.ok(docXml.includes("(edited)"), "edited text exported");
   assert.ok(docXml.includes("sdtContent"), "untouched control still preserved");
 });
+
+// ---------- strikethrough (WO-40) ----------
+test("docx: strike mark round-trips", async () => {
+  const model = sample();
+  model.blocks[0]!.runs = [
+    { text: "keep ", marks: [] },
+    { text: "cut this", marks: ["strike"] },
+    { text: " and ", marks: [] },
+    { text: "both", marks: ["bold", "strike"] },
+  ];
+  const out = await exportDocx(model);
+  const back = await importDocx(out.bytes, parseXml, serializeXml);
+  const runs = back.model.blocks[0]!.runs;
+  assert.ok(runs.some((r) => r.marks.includes("strike") && r.text === "cut this"));
+  assert.ok(runs.some((r) => r.marks.includes("strike") && r.marks.includes("bold")));
+});

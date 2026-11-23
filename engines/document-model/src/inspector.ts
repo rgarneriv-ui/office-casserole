@@ -34,6 +34,7 @@ const MARK_LABEL: Record<Mark, string> = {
   bold: "Bold",
   italic: "Italic",
   underline: "Underline",
+  strike: "Strikethrough",
 };
 
 /** Walk the model in document order and emit formatting codes. */
