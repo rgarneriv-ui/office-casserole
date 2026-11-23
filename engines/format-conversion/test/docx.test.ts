@@ -8,6 +8,8 @@ import { DocModel, SCHEMA_VERSION } from "../../document-model/src/types";
 
 const parseXml = (xml: string): Document =>
   new (new JSDOM("").window.DOMParser)().parseFromString(xml, "application/xml") as unknown as Document;
+const serializeXml = (el: Element): string =>
+  new (new JSDOM("").window.XMLSerializer)().serializeToString(el as never);
 
 function sample(): DocModel {
   return {
@@ -76,7 +78,7 @@ test("docx: export is a valid OOXML package shape", async () => {
 test("docx: export → import round-trip preserves content, structure, and marks", async () => {
   const original = sample();
   const { bytes } = await exportDocx(original);
-  const { model, report } = await importDocx(bytes, parseXml);
+  const { model, report } = await importDocx(bytes, parseXml, serializeXml);
   assert.equal(report.lossless, true, JSON.stringify(report.warnings));
   assert.equal(model.blocks.length, original.blocks.length);
   model.blocks.forEach((b, i) => {
@@ -102,12 +104,12 @@ test("docx: import reports unsupported content instead of claiming fidelity", as
     { name: "[Content_Types].xml", data: new TextEncoder().encode("<Types/>") },
     { name: "word/document.xml", data: new TextEncoder().encode(docXml) },
   ]);
-  const { model, report } = await importDocx(bytes, parseXml);
+  const { model, report } = await importDocx(bytes, parseXml, serializeXml);
   assert.equal(report.lossless, false);
   const codes = report.warnings.map((w) => w.code);
   assert.ok(codes.includes("DOCX-IMPORT-HEADING-LEVEL"));
   assert.ok(codes.includes("DOCX-IMPORT-RUN-PROP"));
-  assert.ok(codes.includes("DOCX-IMPORT-RUN-CONTENT"));
+  assert.ok(codes.includes("DOCX-PRESERVED"), `drawing paragraph preserved: ${codes.join()}`);
   // content was kept, not dropped — table content now lands in a table block
   const text = model.blocks.map((b) => b.runs.map((r) => r.text).join("")).join("\n");
   assert.ok(text.includes("Deep heading"));
@@ -118,9 +120,9 @@ test("docx: import reports unsupported content instead of claiming fidelity", as
 });
 
 test("docx: non-docx input fails loudly", async () => {
-  await assert.rejects(() => importDocx(new TextEncoder().encode("not a zip at all"), parseXml));
+  await assert.rejects(() => importDocx(new TextEncoder().encode("not a zip at all"), parseXml, serializeXml));
   const bytes = await zipWrite([{ name: "readme.txt", data: new TextEncoder().encode("x") }]);
-  await assert.rejects(() => importDocx(bytes, parseXml), /document\.xml missing/);
+  await assert.rejects(() => importDocx(bytes, parseXml, serializeXml), /document\.xml missing/);
 });
 
 test("docx: lists round-trip through real OOXML numbering", async () => {
@@ -144,7 +146,7 @@ test("docx: lists round-trip through real OOXML numbering", async () => {
   assert.ok(docXml.includes('<w:numId w:val="1"/>'), "bullet numId");
   assert.ok(docXml.includes('<w:numId w:val="2"/>'), "decimal numId");
 
-  const { model, report: imp } = await importDocx(bytes, parseXml);
+  const { model, report: imp } = await importDocx(bytes, parseXml, serializeXml);
   assert.equal(imp.lossless, true, JSON.stringify(imp.warnings));
   assert.deepEqual(
     model.blocks.map((b) => b.type),
@@ -164,7 +166,7 @@ test("docx: numPr without resolvable numbering imports as numbered with a warnin
     { name: "[Content_Types].xml", data: new TextEncoder().encode("<Types/>") },
     { name: "word/document.xml", data: new TextEncoder().encode(docXml) },
   ]);
-  const { model, report } = await importDocx(bytes, parseXml);
+  const { model, report } = await importDocx(bytes, parseXml, serializeXml);
   assert.equal(model.blocks[0]!.type, "numbered");
   assert.equal(model.blocks[0]!.indent, 3, "deep level clamps to 3");
   const codes = report.warnings.map((w) => w.code);
@@ -185,7 +187,7 @@ test("docx: tables export as w:tbl and round-trip as table blocks", async () => 
   assert.ok(docXml.includes("<w:gridCol"));
   assert.ok((docXml.match(/<w:tr>/g) ?? []).length === 3, "three rows");
 
-  const { model, report: imp } = await importDocx(bytes, parseXml);
+  const { model, report: imp } = await importDocx(bytes, parseXml, serializeXml);
   assert.equal(imp.lossless, true, JSON.stringify(imp.warnings));
   const back = model.blocks.find((b) => b.type === "table")!;
   assert.deepEqual(back.table, [["Name", "Rate"], ["Rob", "$450"], ["Multi\nline", ""]]);
@@ -205,7 +207,7 @@ test("docx: foreign tables with spans/formatting import with warnings, not flatt
     { name: "[Content_Types].xml", data: new TextEncoder().encode("<Types/>") },
     { name: "word/document.xml", data: new TextEncoder().encode(docXml) },
   ]);
-  const { model, report } = await importDocx(bytes, parseXml);
+  const { model, report } = await importDocx(bytes, parseXml, serializeXml);
   const tbl = model.blocks.find((b) => b.type === "table")!;
   assert.deepEqual(tbl.table, [["Spanning bold", ""], ["a", "b"]], "ragged rows padded rectangular");
   const codes = report.warnings.map((w) => w.code);
@@ -229,7 +231,7 @@ test("docx: nested lists round-trip ilvl and multi-level definitions", async () 
   const numbering = new TextDecoder().decode(entries.find((e) => e.name === "word/numbering.xml")!.data);
   assert.ok(numbering.includes('w:val="lowerLetter"'), "level-1 alpha defined");
   assert.ok(numbering.includes('w:val="lowerRoman"'), "level-2 roman defined");
-  const { model, report } = await importDocx(bytes, parseXml);
+  const { model, report } = await importDocx(bytes, parseXml, serializeXml);
   assert.equal(report.lossless, true, JSON.stringify(report.warnings));
   assert.deepEqual(model.blocks.map((b) => [b.type, b.indent ?? 0]), [["numbered", 0], ["numbered", 1], ["bullet", 2]]);
 });
@@ -251,7 +253,7 @@ test("docx: table style (header, widths, aligns) round-trips", async () => {
   assert.equal(widths.length, 3);
   assert.ok(Math.abs(widths[0]! / widths[1]! - 2) < 0.05, `2:1:1 widths, got ${widths}`);
 
-  const { model, report } = await importDocx(bytes, parseXml);
+  const { model, report } = await importDocx(bytes, parseXml, serializeXml);
   assert.equal(report.lossless, true, JSON.stringify(report.warnings));
   const tbl = model.blocks.find((b) => b.type === "table")!;
   assert.equal(tbl.tableStyle?.headerRow, true);
@@ -290,7 +292,7 @@ test("docx OFP: unknown parts survive import → edit → export; manifests merg
     { name: "word/settings.xml", data: new TextEncoder().encode("<settings>SOURCE SETTINGS</settings>") },
   ]);
 
-  const { model, preserved } = await importDocx(bytes, parseXml);
+  const { model, preserved } = await importDocx(bytes, parseXml, serializeXml);
   assert.ok(preserved.some((p) => p.name === "word/theme/theme1.xml"));
   // edit the model, then export with preservation
   model.blocks.push(newBlock("paragraph", [{ text: "Added by Casserole", marks: [] }]));
@@ -310,6 +312,56 @@ test("docx OFP: unknown parts survive import → edit → export; manifests merg
   assert.ok(rels.includes('Target="theme/theme1.xml"'), "source rels kept");
   assert.ok(rels.includes('Target="numbering.xml"'), "numbering rel merged in");
   // the merged package re-imports cleanly
-  const again = await importDocx(out.bytes, parseXml);
+  const again = await importDocx(out.bytes, parseXml, serializeXml);
   assert.ok(again.model.blocks.some((b) => b.runs.some((r) => r.text === "Added by Casserole")));
+});
+
+// ---------- preserve-until-touched (WO-34, §5.1) ----------
+
+const FOREIGN_DOC =
+  `<?xml version="1.0"?>` +
+  `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>` +
+  `<w:p><w:r><w:t>Plain intro</w:t></w:r></w:p>` +
+  `<w:p><w:r><w:t>Updated </w:t></w:r>` +
+  `<w:fldSimple w:instr=" DATE "><w:r><w:t>2026-11-23</w:t></w:r></w:fldSimple></w:p>` +
+  `<w:sdt><w:sdtPr/><w:sdtContent><w:p><w:r><w:t>Control body</w:t></w:r></w:p></w:sdtContent></w:sdt>` +
+  `<w:sectPr/></w:body></w:document>`;
+
+async function foreignDocBytes(): Promise<Uint8Array> {
+  return zipWrite([
+    { name: "[Content_Types].xml", data: new TextEncoder().encode("<Types/>") },
+    { name: "word/document.xml", data: new TextEncoder().encode(FOREIGN_DOC) },
+  ]);
+}
+
+test("docx preserve: fields and content controls survive an untouched round-trip", async () => {
+  const { model, report } = await importDocx(await foreignDocBytes(), parseXml, serializeXml);
+  // text extracted for display
+  const texts = model.blocks.map((b) => b.runs.map((r) => r.text).join(""));
+  assert.deepEqual(texts, ["Plain intro", "Updated 2026-11-23", "Control body"]);
+  assert.ok(model.blocks[1]!.foreignDocx, "field paragraph carries original XML");
+  assert.ok(model.blocks[2]!.foreignDocx, "single-para sdt carries original XML");
+  assert.ok(report.warnings.every((w) => w.code === "DOCX-PRESERVED"), "preservation is reported, not loss");
+
+  const out = await exportDocx(model);
+  assert.equal(out.report.lossless, true, "untouched export is lossless");
+  const entries = await zipRead(out.bytes);
+  const docXml = new TextDecoder().decode(entries.find((e) => e.name === "word/document.xml")!.data);
+  assert.ok(docXml.includes("fldSimple"), "field construct re-emitted verbatim");
+  assert.ok(docXml.includes("sdtContent"), "content control re-emitted verbatim");
+  assert.ok(docXml.includes(`w:instr=" DATE "`), "field instruction intact");
+});
+
+test("docx preserve: an edited paragraph regenerates and reports the drop", async () => {
+  const { model } = await importDocx(await foreignDocBytes(), parseXml, serializeXml);
+  // simulate an edit to the field paragraph
+  model.blocks[1]!.runs.push({ text: " (edited)", marks: [] });
+  const out = await exportDocx(model);
+  assert.equal(out.report.lossless, false);
+  assert.ok(out.report.warnings.some((w) => w.code === "DOCX-FOREIGN-DROPPED"));
+  const entries = await zipRead(out.bytes);
+  const docXml = new TextDecoder().decode(entries.find((e) => e.name === "word/document.xml")!.data);
+  assert.ok(!docXml.includes("fldSimple"), "edited paragraph no longer carries the stale field");
+  assert.ok(docXml.includes("(edited)"), "edited text exported");
+  assert.ok(docXml.includes("sdtContent"), "untouched control still preserved");
 });

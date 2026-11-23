@@ -8,7 +8,7 @@
  */
 
 import { Block, BlockType, DocModel, Mark, SCHEMA_VERSION } from "../../document-model/src/types";
-import { newBlock, normalizeModel, validateModel } from "../../document-model/src/model";
+import { contentHash, newBlock, normalizeModel, validateModel } from "../../document-model/src/model";
 import { LossReport, LossWarning } from "../../document-model/src/serialize";
 import { ZipEntry, zipRead, zipWrite } from "./zip";
 
@@ -136,12 +136,24 @@ function tableXml(table: string[][], style: import("../../document-model/src/typ
   return `<w:tbl><w:tblPr>${borders}</w:tblPr>${grid}${rows}</w:tbl>`;
 }
 
-function documentXml(model: DocModel): string {
+function documentXml(model: DocModel, warnings: LossWarning[]): string {
   return (
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
     `<w:document xmlns:w="${W_NS}"><w:body>` +
     model.blocks
-      .map((b) => (b.type === "table" && b.table ? tableXml(b.table, b.tableStyle) : paragraphXml(b)))
+      .map((b, bi) => {
+        if (b.foreignDocx) {
+          if (contentHash(b) === b.foreignDocx.hash) {
+            return b.foreignDocx.xml; // untouched: the original construct survives
+          }
+          warnings.push({
+            code: "DOCX-FOREIGN-DROPPED",
+            message: `Paragraph ${bi + 1} was edited, so its preserved construct (field/link/control/comment anchor) was replaced by the edited plain content.`,
+            blockIndex: bi,
+          });
+        }
+        return b.type === "table" && b.table ? tableXml(b.table, b.tableStyle) : paragraphXml(b);
+      })
       .join("") +
     `<w:sectPr/></w:body></w:document>`
   );
@@ -236,10 +248,11 @@ export async function exportDocx(
   // source styles win (richer theme-linked definitions); ours is the fallback
   const styles = byName.get("word/styles.xml");
 
+  const warnings: LossWarning[] = [];
   const entries: ZipEntry[] = [
     { name: "[Content_Types].xml", data: textEncoder.encode(contentTypes) },
     { name: "_rels/.rels", data: textEncoder.encode(ROOT_RELS) },
-    { name: "word/document.xml", data: textEncoder.encode(documentXml(model)) },
+    { name: "word/document.xml", data: textEncoder.encode(documentXml(model, warnings)) },
     { name: "word/_rels/document.xml.rels", data: textEncoder.encode(docRels) },
     { name: "word/styles.xml", data: styles ? styles.data : textEncoder.encode(stylesXml()) },
     { name: "word/numbering.xml", data: textEncoder.encode(NUMBERING_XML) },
@@ -251,13 +264,20 @@ export async function exportDocx(
     emitted.add(part.name);
   }
   const bytes = await zipWrite(entries);
-  // The v0 model subset is fully representable in WordprocessingML.
-  return { bytes, report: { format: "docx", lossless: true, warnings: [] } };
+  return { bytes, report: { format: "docx", lossless: warnings.length === 0, warnings } };
 }
 
 // ---------- import ----------
 
 export type XmlParse = (xml: string) => Document;
+export type XmlSerialize = (el: Element) => string;
+
+function defaultSerialize(el: Element): string {
+  if (typeof XMLSerializer === "undefined") {
+    throw new Error("No XML serializer available: pass serializeXml to importDocx");
+  }
+  return new XMLSerializer().serializeToString(el);
+}
 
 /** An untouched package part carried through import → export (§5.1 Original
  *  Format Preservation). Parts we rebuild (document.xml, numbering.xml, the
@@ -323,7 +343,8 @@ const SUPPORTED_R_CHILDREN = new Set(["rPr", "t", "br", "lastRenderedPageBreak"]
 
 export async function importDocx(
   bytes: Uint8Array,
-  parseXml: XmlParse = defaultParse
+  parseXml: XmlParse = defaultParse,
+  serializeXml: XmlSerialize = defaultSerialize
 ): Promise<{ model: DocModel; report: LossReport; preserved: PreservedPart[] }> {
   const warnings: LossWarning[] = [];
   const entries = await zipRead(bytes);
@@ -427,6 +448,31 @@ export async function importDocx(
         warnings.push({ code: "DOCX-IMPORT-TABLE-FORMATTING", message: "Character formatting inside table cells was dropped (cells are plain text).", blockIndex: bi });
       continue;
     }
+    if (el.localName === "sdt") {
+      const innerPs = descendantsByLocalName(el, "p");
+      if (innerPs.length === 1) {
+        // single-paragraph content control: preserve the whole sdt
+        const block = importParagraph(innerPs[0]!, bi, warnings, numFmtById);
+        block.foreignDocx = { xml: serializeXml(el), hash: "" };
+        block.foreignDocx.hash = hashOf(block);
+        warnings.push({
+          code: "DOCX-PRESERVED",
+          message: `A content control renders as plain text here; it re-exports unchanged unless this paragraph is edited.`,
+          blockIndex: bi,
+        });
+        model.blocks.push(block);
+      } else {
+        warnings.push({
+          code: "DOCX-IMPORT-SDT-UNWRAPPED",
+          message: `A multi-paragraph content control was unwrapped (its wrapper is dropped; the content is kept).`,
+          blockIndex: bi,
+        });
+        for (const p2 of innerPs) {
+          model.blocks.push(importParagraph(p2, model.blocks.length, warnings, numFmtById, serializeXml));
+        }
+      }
+      continue;
+    }
     if (el.localName !== "p") {
       warnings.push({
         code: "DOCX-IMPORT-UNSUPPORTED",
@@ -435,10 +481,14 @@ export async function importDocx(
       });
       continue;
     }
-    model.blocks.push(importParagraph(el, bi, warnings, numFmtById));
+    model.blocks.push(importParagraph(el, bi, warnings, numFmtById, serializeXml));
   }
 
   normalizeModel(model);
+  // hashes must reflect the post-normalization content (runs may coalesce)
+  for (const b of model.blocks) {
+    if (b.foreignDocx) b.foreignDocx.hash = contentHash(b);
+  }
   const errors = validateModel(model);
   if (errors.length > 0) throw new Error(`DOCX import produced invalid model: ${errors.join("; ")}`);
   return {
@@ -448,11 +498,17 @@ export async function importDocx(
   };
 }
 
+function hashOf(block: Block): string {
+  // re-exported from the model to keep one definition
+  return contentHash(block);
+}
+
 function importParagraph(
   p: Element,
   blockIndex: number,
   warnings: LossWarning[],
-  numFmtById: Map<string, string> = new Map()
+  numFmtById: Map<string, string> = new Map(),
+  serializeXml?: XmlSerialize
 ): Block {
   let type: BlockType = "paragraph";
   let pendingIndent = 0;
@@ -505,6 +561,7 @@ function importParagraph(
 
   const block = newBlock(type);
   if ((type === "bullet" || type === "numbered") && pendingIndent > 0) block.indent = pendingIndent;
+  const foreignKinds = new Set<string>();
   for (const child of Array.from(p.children)) {
     if (child.localName === "r") {
       const marks: Mark[] = [];
@@ -528,28 +585,51 @@ function importParagraph(
       for (const rc of Array.from(child.children)) {
         if (rc.localName === "t") {
           block.runs.push({ text: rc.textContent ?? "", marks: [...marks] });
+        } else if (rc.localName === "instrText" || rc.localName === "fldChar") {
+          foreignKinds.add("field");
+        } else if (rc.localName === "commentReference") {
+          foreignKinds.add("comment anchor");
         } else if (!SUPPORTED_R_CHILDREN.has(rc.localName)) {
-          warnings.push({
-            code: "DOCX-IMPORT-RUN-CONTENT",
-            message: `Run content <${rc.localName}> was skipped.`,
-            blockIndex,
-          });
+          foreignKinds.add(`<${rc.localName}>`);
         }
       }
     } else if (child.localName === "hyperlink") {
-      // keep the text, report the lost link target
       for (const t of descendantsByLocalName(child, "t")) {
         block.runs.push({ text: t.textContent ?? "", marks: ["underline"] });
       }
+      foreignKinds.add("hyperlink");
+    } else if (child.localName === "fldSimple") {
+      for (const t of descendantsByLocalName(child, "t")) {
+        block.runs.push({ text: t.textContent ?? "", marks: [] });
+      }
+      foreignKinds.add("field");
+    } else if (child.localName === "sdt") {
+      for (const t of descendantsByLocalName(child, "t")) {
+        block.runs.push({ text: t.textContent ?? "", marks: [] });
+      }
+      foreignKinds.add("content control");
+    } else if (
+      child.localName === "commentRangeStart" ||
+      child.localName === "commentRangeEnd"
+    ) {
+      foreignKinds.add("comment anchor");
+    } else if (!SUPPORTED_P_CHILDREN.has(child.localName)) {
+      foreignKinds.add(`<${child.localName}>`);
+    }
+  }
+  if (foreignKinds.size > 0) {
+    if (serializeXml) {
+      block.foreignDocx = { xml: serializeXml(p), hash: "" };
+      block.foreignDocx.hash = hashOf(block);
       warnings.push({
-        code: "DOCX-IMPORT-HYPERLINK",
-        message: "Hyperlink target dropped; link text kept (links not yet in the model).",
+        code: "DOCX-PRESERVED",
+        message: `Preserved in place: ${[...foreignKinds].join(", ")} (renders as plain text here; re-exports unchanged unless this paragraph is edited).`,
         blockIndex,
       });
-    } else if (!SUPPORTED_P_CHILDREN.has(child.localName)) {
+    } else {
       warnings.push({
         code: "DOCX-IMPORT-PARA-CONTENT",
-        message: `Paragraph content <${child.localName}> was skipped.`,
+        message: `Unsupported paragraph content dropped: ${[...foreignKinds].join(", ")}.`,
         blockIndex,
       });
     }

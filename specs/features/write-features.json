@@ -56,7 +56,7 @@
       }
     ],
     "knownLimitations": [
-      "End-to-end tests cover boot/render; full input-simulation E2E not yet automated — status stays below verified",
+      "End-to-end tests cover boot/render; full input-simulation E2E not yet automated \u2014 status stays below verified",
       "Undo is operation-log based since ADR-0009 (Slides deck still snapshot-based)"
     ]
   },
@@ -107,7 +107,7 @@
       }
     ],
     "knownLimitations": [
-      "Inspector is read+navigate; §6.2.3 in-panel code editing not yet implemented"
+      "Inspector is read+navigate; \u00a76.2.3 in-panel code editing not yet implemented"
     ]
   },
   {
@@ -162,7 +162,7 @@
     "application": "casserole-write",
     "name": "Export with per-format loss reporting",
     "priority": "P1",
-    "description": "Export native JSON (lossless), HTML (lossless for the model subset), and Markdown; lossy Markdown exports present a loss report and require confirmation before a destructive export (§5.3).",
+    "description": "Export native JSON (lossless), HTML (lossless for the model subset), and Markdown; lossy Markdown exports present a loss report and require confirmation before a destructive export (\u00a75.3).",
     "baseline": {
       "product": "Microsoft Word",
       "capability": "Save As + compatibility checker",
@@ -204,7 +204,7 @@
       }
     ],
     "knownLimitations": [
-      "DOCX/ODT/PDF converters not yet implemented; they join the same loss-report pipeline (§5.2)"
+      "DOCX/ODT/PDF converters not yet implemented; they join the same loss-report pipeline (\u00a75.2)"
     ]
   },
   {
@@ -251,7 +251,7 @@
     "evidence": [
       {
         "kind": "test-run",
-        "ref": "scripts/smoke-write.mjs scenarios 1–2: pass",
+        "ref": "scripts/smoke-write.mjs scenarios 1\u20132: pass",
         "date": "2026-11-22"
       }
     ],
@@ -287,7 +287,7 @@
       "corrupt zip rejected via CRC"
     ],
     "acceptance": [
-      "Export → import round-trip preserves structure, text, and marks for the model subset",
+      "Export \u2192 import round-trip preserves structure, text, and marks for the model subset",
       "Import of unsupported content yields DOCX-IMPORT-* warnings and keeps the text",
       "Non-DOCX and corrupt input fails loudly"
     ],
@@ -311,7 +311,7 @@
       }
     ],
     "knownLimitations": [
-      "Fixture corpus is self-generated + synthetic; no real-Word differential corpus yet (§22.2), so status stays below verified",
+      "Fixture corpus is self-generated + synthetic; no real-Word differential corpus yet (\u00a722.2), so status stays below verified",
       "Unknown constructs inside document.xml (fields, content controls, comment anchors) are not yet preserved"
     ]
   },
@@ -581,7 +581,7 @@
       }
     ],
     "knownLimitations": [
-      "No op serialization/authorship yet (next step toward §14.1 collaboration); Slides deck undo still snapshot-based"
+      "No op serialization/authorship yet (next step toward \u00a714.1 collaboration); Slides deck undo still snapshot-based"
     ]
   },
   {
@@ -771,8 +771,39 @@
       }
     ],
     "knownLimitations": [
-      "Plain-text cells (no per-cell formatting or nested blocks — ADR-0011 migration recorded)",
+      "Plain-text cells (no per-cell formatting or nested blocks \u2014 ADR-0011 migration recorded)",
       "No cell spans"
     ]
+  },
+  {
+    "id": "WRITE-DOCX-PRESERVE-002",
+    "name": "Preserve-until-touched foreign constructs in document.xml",
+    "application": "write",
+    "description": "Paragraphs containing fields, content controls, hyperlinks or comment anchors keep their original w:p XML plus a post-normalization content hash. Export re-emits the original verbatim while the hash matches; an edited paragraph regenerates from the model and reports DOCX-FOREIGN-DROPPED. Multi-paragraph sdt wrappers are unwrapped with a warning.",
+    "status": "tested",
+    "owner": "ai",
+    "priority": "P1",
+    "dependencies": [
+      "WRITE-DOCX-PRESERVE-001"
+    ],
+    "commands": [],
+    "acceptance": [
+      "untouched field/sdt round-trip is byte-preserved in document.xml and lossless per report",
+      "edited paragraph regenerates with DOCX-FOREIGN-DROPPED",
+      "preserved and edited exports both parse in python-docx"
+    ],
+    "edgeCases": [
+      "run coalescing during normalization handled by hashing after normalizeModel",
+      "block merges/table conversion invalidate the hash naturally"
+    ],
+    "knownLimitations": [
+      "constructs render as plain text in Casserole (preservation, not support)",
+      "hyperlink rIds in preserved XML rely on merged source rels (package-part preservation)",
+      "multi-paragraph content controls lose their wrapper"
+    ],
+    "evidence": "engines/format-conversion/test/docx.test.ts preserve suites; python-docx cross-validation",
+    "verification": "unit + independent python-docx parse; not independently reviewed",
+    "baseline": "Word keeps all constructs natively",
+    "offlineSupport": true
   }
 ]

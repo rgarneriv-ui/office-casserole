@@ -38,6 +38,12 @@ export interface Block {
   /** Table presentation (only with table): header row, per-column alignment
    *  and relative widths. Travels inside set-table payloads. */
   tableStyle?: TableStyle;
+  /** §5.1 preserve-until-touched: the original source XML of a paragraph
+   *  containing constructs we cannot model (fields, content controls, comment
+   *  anchors, hyperlinks), plus a hash of the imported content. Exporters
+   *  re-emit the original XML while the hash still matches; an edited block
+   *  regenerates and reports the dropped constructs. Opaque to the engine. */
+  foreignDocx?: { xml: string; hash: string };
 }
 
 export interface DocModel {

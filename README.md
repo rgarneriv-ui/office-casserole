@@ -121,9 +121,11 @@ files saved by actual Office applications are the ones that matter most.
 ## Next engineering tasks (dependency order)
 
 1. Grow the fixture corpus with real Word/Excel/PowerPoint files. OFP now
-   carries unknown DOCX package parts through edit round-trips; remaining
-   §5.1 work is preserving unknown constructs inside document.xml (fields,
-   content controls, comment anchors).
+   carries unknown DOCX package parts through edit round-trips, and
+   constructs inside document.xml (fields, content controls, hyperlinks,
+   comment anchors) are preserved until their paragraph is edited
+   (ADR-0012); remaining §5.1 work is per-run preservation and preserved
+   construct rendering in the editor.
 2. Relay protocol (§14.3 cursor exchange), presence, and conflict UX —
    the first work that needs a second machine. Write already records into
    an attributed DocumentJournal at runtime (undo/redo journal as inverse

@@ -14,6 +14,7 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import { JSDOM } from "jsdom";
 
 const parseXml = (xml) => new (new JSDOM("").window.DOMParser)().parseFromString(xml, "application/xml");
+const serializeXml = (el) => new (new JSDOM("").window.XMLSerializer)().serializeToString(el);
 
 const { importDocx } = await import("../build/engines/format-conversion/src/docx.js");
 const { importPptx } = await import("../build/engines/format-conversion/src/pptx.js");
@@ -39,7 +40,7 @@ for (const name of await listFixtures("tests/fixtures/docx")) {
   const path = `tests/fixtures/docx/${name}`;
   try {
     const bytes = new Uint8Array(await readFile(path));
-    const { model, report } = await importDocx(bytes, parseXml);
+    const { model, report } = await importDocx(bytes, parseXml, serializeXml);
     const errors = validateModel(model);
     if (errors.length > 0) throw new Error(`invalid model: ${errors.join("; ")}`);
     const out = {

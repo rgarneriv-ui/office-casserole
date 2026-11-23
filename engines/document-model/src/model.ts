@@ -186,3 +186,20 @@ export function marksAt(block: Block, offset: number): Mark[] {
   if (offset === 0) return [...block.runs[0]!.marks];
   return [...block.runs[block.runs.length - 1]!.marks];
 }
+
+/** Stable content hash for preserve-until-touched (§5.1): covers everything
+ *  an edit can change; ids and foreign payloads excluded. */
+export function contentHash(block: Block): string {
+  const basis = JSON.stringify({
+    t: block.type,
+    i: block.indent ?? 0,
+    r: block.runs,
+    tb: block.table ?? null,
+    ts: block.tableStyle ?? null,
+  });
+  let h = 5381;
+  for (let i = 0; i < basis.length; i++) {
+    h = ((h * 33) ^ basis.charCodeAt(i)) >>> 0;
+  }
+  return h.toString(36);
+}

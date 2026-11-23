@@ -44,7 +44,7 @@
       }
     ],
     "knownLimitations": [
-      "No differential testing against Excel yet (§7.2); no dynamic arrays, volatile functions, or external data"
+      "No differential testing against Excel yet (\u00a77.2); no dynamic arrays, volatile functions, or external data"
     ]
   },
   {
@@ -52,7 +52,7 @@
     "application": "casserole-sheets",
     "name": "Grid application slice",
     "priority": "P1",
-    "description": "12×40 grid rendering engine values, formula-bar editing, Enter/Tab/arrow navigation, numeric/error styling, autosave, CSV export of displayed values.",
+    "description": "12\u00d740 grid rendering engine values, formula-bar editing, Enter/Tab/arrow navigation, numeric/error styling, autosave, CSV export of displayed values.",
     "baseline": {
       "product": "Microsoft Excel",
       "capability": "Worksheet grid basics",
@@ -158,7 +158,7 @@
     "application": "casserole-sheets",
     "name": "Cell formatting (bold, alignment, number formats)",
     "priority": "P1",
-    "description": "Per-cell display formats — bold, left/center/right alignment, Number/Currency/Percent — applied from the toolbar, persisted with the sheet, rendered in the grid and CSV display values, and exported as real XLSX styles (numFmts + fonts + cellXfs). Values and the dependency graph are untouched by formatting. XLSX import reads styles back (bold, alignment, number formats via builtin ids and format-code heuristics), so styled round-trips are lossless; unrepresentable aspects warn once with specifics.",
+    "description": "Per-cell display formats \u2014 bold, left/center/right alignment, Number/Currency/Percent \u2014 applied from the toolbar, persisted with the sheet, rendered in the grid and CSV display values, and exported as real XLSX styles (numFmts + fonts + cellXfs). Values and the dependency graph are untouched by formatting. XLSX import reads styles back (bold, alignment, number formats via builtin ids and format-code heuristics), so styled round-trips are lossless; unrepresentable aspects warn once with specifics.",
     "baseline": {
       "product": "Microsoft Excel",
       "capability": "Basic cell formatting",
@@ -280,5 +280,39 @@
     "knownLimitations": [
       "External paste is values-only TSV and needs clipboard-read permission; no fill handle, row heights, or multi-area selection"
     ]
+  },
+  {
+    "id": "SHEETS-FILL-001",
+    "name": "Fill handle",
+    "application": "sheets",
+    "description": "Drag the selection's corner grip to fill down or right: consistent-step numeric patterns continue as arithmetic series; other patterns cycle with formulas shifted per cell ($ anchors pinned); formats travel with their pattern cell.",
+    "status": "tested",
+    "owner": "ai",
+    "priority": "P1",
+    "dependencies": [
+      "SHEETS-CLIP-001"
+    ],
+    "commands": [
+      "fillRange"
+    ],
+    "acceptance": [
+      "1,2 filled down yields 3,4,5",
+      "=A1*10 filled down rebases to =A2*10, =A3*10",
+      "mixed patterns cycle",
+      "fill right works symmetrically",
+      "formats carried"
+    ],
+    "edgeCases": [
+      "single numeric value copies rather than extrapolating",
+      "near-equal float steps tolerated to 1e-9",
+      "results rounded to 10 decimal places to avoid float drift"
+    ],
+    "knownLimitations": [
+      "no geometric/date series; no fill up/left; no drag-to-shrink clearing"
+    ],
+    "evidence": "engines/spreadsheet-calc/test/clipboard.test.ts fill suites; scripts/smoke-sheets.mjs fill-handle scenario",
+    "verification": "unit + jsdom smoke; not independently reviewed",
+    "baseline": "Excel/Sheets fill handle (subset)",
+    "offlineSupport": true
   }
 ]
