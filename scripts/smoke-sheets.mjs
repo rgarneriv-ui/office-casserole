@@ -19,7 +19,8 @@ assert(cell("D6").classList.contains("num"), "numeric styling applied");
 
 // commit an edit through the formula bar and verify recalculation + autosave
 const formula = doc.getElementById("formula");
-doc.querySelector('td[data-addr="B2"]').dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+doc.querySelector('td[data-addr="B2"]').dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
+doc.dispatchEvent(new dom.window.MouseEvent("pointerup", { bubbles: true }));
 formula.value = "100";
 formula.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
 formula.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
@@ -32,10 +33,41 @@ assert(saved.some((e) => e.addr === "B2" && e.input === "100"), "autosave persis
 
 assert(cell("A1").classList.contains("bold"), "header cell styled bold");
 // toggle a format from the toolbar and verify persistence includes it
-doc.querySelector('td[data-addr="A2"]').dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+doc.querySelector('td[data-addr="A2"]').dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
+doc.dispatchEvent(new dom.window.MouseEvent("pointerup", { bubbles: true }));
 doc.getElementById("btn-bold").dispatchEvent(new dom.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
 assert(cell("A2").classList.contains("bold"), "toolbar bold applied");
 await new Promise(r => setTimeout(r, 700));
 const saved2 = JSON.parse(dom.window.localStorage.getItem("casserole-sheets:v1:default"));
 assert(saved2.some(e => e.addr === "A2" && e.format && e.format.bold === true), "format persisted");
 console.log("SMOKE OK — sheets boot, recalc ripple, formats, autosave");
+
+// range selection, range formatting, copy/paste with formula rebasing
+{
+  const td = (a) => doc.querySelector(`td[data-addr="${a}"]`);
+  const formula2 = doc.getElementById("formula");
+  const down = (a) => td(a).dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
+  const key = (k, opts={}) => formula2.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: k, bubbles: true, cancelable: true, ...opts }));
+
+  // shift-click selects B2:C3; bold applies to the whole range
+  down("B2");
+  doc.dispatchEvent(new dom.window.MouseEvent("pointerup", { bubbles: true }));
+  td("C3").dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true, cancelable: true, shiftKey: true }));
+  doc.dispatchEvent(new dom.window.MouseEvent("pointerup", { bubbles: true }));
+  assert(doc.getElementById("addr").textContent === "B2:C3", "range label shows B2:C3, got " + doc.getElementById("addr").textContent);
+  assert(td("C2").classList.contains("in-range"), "range highlighted");
+  doc.getElementById("btn-bold").dispatchEvent(new dom.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  assert(td("B2").classList.contains("bold") && td("C3").classList.contains("bold"), "bold applied across range");
+
+  // copy D2 (=B2*C2) and paste at D10: refs rebase to B10*C10
+  down("D2");
+  doc.dispatchEvent(new dom.window.MouseEvent("pointerup", { bubbles: true }));
+  key("c", { ctrlKey: true });
+  down("D10");
+  doc.dispatchEvent(new dom.window.MouseEvent("pointerup", { bubbles: true }));
+  key("v", { ctrlKey: true });
+  down("D10");
+  doc.dispatchEvent(new dom.window.MouseEvent("pointerup", { bubbles: true }));
+  assert(formula2.value === "=B10*C10", "pasted formula rebased, got " + formula2.value);
+}
+console.log("SMOKE OK — range select, range format, copy/paste rebasing");

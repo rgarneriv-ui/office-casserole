@@ -38,6 +38,8 @@
   td.bold { font-weight: 700; }
   td.error { color: #a33b2c; font-weight: 600; }
   td.selected { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--sel); }
+  td.in-range { background: #ecf3ec; }
+  td { user-select: none; }
   footer { padding: 6px 16px; font-size: 12px; color: var(--muted); background: var(--panel);
            border-top: 1px solid var(--line); }
 </style>
@@ -70,7 +72,7 @@
   </header>
   <div class="grid-wrap"><table id="grid"></table></div>
   <footer>
-    Click a cell, type in the formula bar, Enter commits (Tab moves right; arrows navigate when not editing).
+    Click or drag to select (Shift extends); type in the formula bar, Enter commits. Ctrl/Cmd-C/X/V copy, cut and paste with Excel-style formula rebasing; Delete clears a range.
     Functions: SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, IF, AND, OR, NOT, ABS, SQRT, ROUND, LEN, UPPER, LOWER, CONCAT.
     Errors show as #DIV/0!, #CYCLE!, #NAME?, #VALUE!, #PARSE!.
   </footer>
@@ -803,6 +805,126 @@
     }
   };
 
+  // engines/spreadsheet-calc/src/clipboard.ts
+  var REF_RE = /^(\$?)([A-Za-z]{1,3})(\$?)([0-9]+)$/;
+  function shiftFormula(body, dRow, dCol) {
+    let tokens;
+    try {
+      tokens = tokenize(body);
+    } catch {
+      return body;
+    }
+    const edits = [];
+    tokens.forEach((tok, i) => {
+      if (tok.kind !== "ident") return;
+      const isCall = tokens[i + 1]?.kind === "op" && tokens[i + 1]?.text === "(";
+      if (isCall) return;
+      const m = REF_RE.exec(tok.text);
+      if (!m || !parseAddr(tok.text)) return;
+      const colAnchored = m[1] === "$";
+      const rowAnchored = m[3] === "$";
+      let col = nameToCol(m[2]);
+      let row = parseInt(m[4], 10) - 1;
+      if (!colAnchored) col += dCol;
+      if (!rowAnchored) row += dRow;
+      const repl = col < 0 || row < 0 ? "#REF!" : `${colAnchored ? "$" : ""}${colToName(col)}${rowAnchored ? "$" : ""}${row + 1}`;
+      edits.push({ start: tok.pos, end: tok.pos + tok.text.length, repl });
+    });
+    let out = "";
+    let cursor = 0;
+    for (const e of edits) {
+      out += body.slice(cursor, e.start) + e.repl;
+      cursor = e.end;
+    }
+    return out + body.slice(cursor);
+  }
+  function normalizeRect(aAddr, bAddr) {
+    const a = parseAddr(aAddr);
+    const b = parseAddr(bAddr);
+    return {
+      r0: Math.min(a.row, b.row),
+      c0: Math.min(a.col, b.col),
+      r1: Math.max(a.row, b.row),
+      c1: Math.max(a.col, b.col)
+    };
+  }
+  function copyRange(sheet2, rect) {
+    const cells = [];
+    for (let r = rect.r0; r <= rect.r1; r++) {
+      for (let c = rect.c0; c <= rect.c1; c++) {
+        const addr = formatAddr({ col: c, row: r });
+        const input = sheet2.getInput(addr);
+        const format = sheet2.getFormat(addr);
+        if (input !== "" || Object.keys(format).length > 0) {
+          const cell = { dRow: r - rect.r0, dCol: c - rect.c0, input };
+          if (Object.keys(format).length > 0) cell.format = format;
+          cells.push(cell);
+        }
+      }
+    }
+    return {
+      rows: rect.r1 - rect.r0 + 1,
+      cols: rect.c1 - rect.c0 + 1,
+      srcRow: rect.r0,
+      srcCol: rect.c0,
+      cells
+    };
+  }
+  function clearRange(sheet2, rect) {
+    for (let r = rect.r0; r <= rect.r1; r++) {
+      for (let c = rect.c0; c <= rect.c1; c++) {
+        const addr = formatAddr({ col: c, row: r });
+        if (sheet2.getInput(addr) !== "") sheet2.setCell(addr, "");
+      }
+    }
+  }
+  function pasteClip(sheet2, clip2, atAddr) {
+    const at = parseAddr(atAddr);
+    const dRow = at.row - clip2.srcRow;
+    const dCol = at.col - clip2.srcCol;
+    const rect = {
+      r0: at.row,
+      c0: at.col,
+      r1: at.row + clip2.rows - 1,
+      c1: at.col + clip2.cols - 1
+    };
+    clearRange(sheet2, rect);
+    for (const cell of clip2.cells) {
+      const addr = formatAddr({ col: at.col + cell.dCol, row: at.row + cell.dRow });
+      let input = cell.input;
+      if (input.startsWith("=")) {
+        input = "=" + shiftFormula(input.slice(1), dRow, dCol);
+      }
+      if (input !== "") sheet2.setCell(addr, input);
+      if (cell.format) sheet2.setFormat(addr, cell.format);
+    }
+    return rect;
+  }
+  function rangeToTSV(sheet2, rect) {
+    const lines = [];
+    for (let r = rect.r0; r <= rect.r1; r++) {
+      const row = [];
+      for (let c = rect.c0; c <= rect.c1; c++) {
+        row.push(sheet2.getDisplay(formatAddr({ col: c, row: r })).replace(/[\t\n]/g, " "));
+      }
+      lines.push(row.join("	"));
+    }
+    return lines.join("\n");
+  }
+  function pasteTSV(sheet2, tsv, atAddr) {
+    const at = parseAddr(atAddr);
+    const rows = tsv.replace(/\r/g, "").replace(/\n$/, "").split("\n");
+    let maxCols = 1;
+    rows.forEach((line, r) => {
+      const cells = line.split("	");
+      maxCols = Math.max(maxCols, cells.length);
+      cells.forEach((value, c) => {
+        sheet2.setCell(formatAddr({ col: at.col + c, row: at.row + r }), value);
+      });
+    });
+    return { r0: at.row, c0: at.col, r1: at.row + rows.length - 1, c1: at.col + maxCols - 1 };
+  }
+
   // engines/format-conversion/src/zip.ts
   var CRC_TABLE = (() => {
     const table = new Uint32Array(256);
@@ -1242,7 +1364,25 @@
   var STORAGE_KEY = "casserole-sheets:v1:default";
   var sheet = new Sheet();
   var selected = "A1";
+  var selAnchor = "A1";
   var editing = false;
+  var dragging = false;
+  var clip = null;
+  function selRect() {
+    return normalizeRect(selAnchor, selected);
+  }
+  function inRect(rect, col, row) {
+    return row >= rect.r0 && row <= rect.r1 && col >= rect.c0 && col <= rect.c1;
+  }
+  function rangeIsMulti() {
+    const r = selRect();
+    return r.r0 !== r.r1 || r.c0 !== r.c1;
+  }
+  function eachInRect(rect, fn) {
+    for (let r = rect.r0; r <= rect.r1; r++) {
+      for (let c = rect.c0; c <= rect.c1; c++) fn(formatAddr({ col: c, row: r }));
+    }
+  }
   var gridEl = document.getElementById("grid");
   var formulaEl = document.getElementById("formula");
   var addrEl = document.getElementById("addr");
@@ -1319,14 +1459,17 @@
       const addr = td.dataset.addr;
       const value = sheet.getCell(addr);
       const fmt = sheet.getFormat(addr);
+      const a = parseAddr(addr);
       td.textContent = sheet.getDisplay(addr);
       td.classList.toggle("error", isError(value));
       td.classList.toggle("num", typeof value === "number");
       td.classList.toggle("selected", addr === selected);
+      td.classList.toggle("in-range", rangeIsMulti() && inRect(selRect(), a.col, a.row));
       td.classList.toggle("bold", fmt.bold === true);
       td.style.textAlign = fmt.align ?? "";
     });
-    addrEl.textContent = selected;
+    const r = selRect();
+    addrEl.textContent = rangeIsMulti() ? `${formatAddr({ col: r.c0, row: r.r0 })}:${formatAddr({ col: r.c1, row: r.r1 })}` : selected;
     if (!editing) formulaEl.value = sheet.getInput(selected);
     syncFormatToolbar();
   }
@@ -1340,25 +1483,28 @@
   }
   document.getElementById("btn-bold")?.addEventListener("mousedown", (e) => {
     e.preventDefault();
-    sheet.setFormat(selected, { bold: sheet.getFormat(selected).bold ? null : true });
+    const turnOn = !sheet.getFormat(selected).bold;
+    eachInRect(selRect(), (addr) => sheet.setFormat(addr, { bold: turnOn ? true : null }));
     refreshValues();
     scheduleSave();
   });
   document.getElementById("fmt-num")?.addEventListener("change", (e) => {
-    sheet.setFormat(selected, { numFmt: e.target.value });
+    const v = e.target.value;
+    eachInRect(selRect(), (addr) => sheet.setFormat(addr, { numFmt: v }));
     refreshValues();
     scheduleSave();
     formulaEl.focus();
   });
   document.getElementById("fmt-align")?.addEventListener("change", (e) => {
     const v = e.target.value;
-    sheet.setFormat(selected, { align: v === "auto" ? null : v });
+    eachInRect(selRect(), (addr) => sheet.setFormat(addr, { align: v === "auto" ? null : v }));
     refreshValues();
     scheduleSave();
     formulaEl.focus();
   });
-  function select(addr) {
+  function select(addr, extend = false) {
     selected = addr;
+    if (!extend) selAnchor = addr;
     editing = false;
     refreshValues();
   }
@@ -1371,10 +1517,21 @@
     refreshValues();
     scheduleSave();
   }
-  gridEl.addEventListener("click", (e) => {
+  gridEl.addEventListener("pointerdown", (e) => {
     const td = e.target.closest("td[data-addr]");
-    if (td) {
-      select(td.dataset.addr);
+    if (!td) return;
+    select(td.dataset.addr, e.shiftKey);
+    dragging = true;
+    e.preventDefault();
+  });
+  gridEl.addEventListener("pointerover", (e) => {
+    if (!dragging) return;
+    const td = e.target.closest("td[data-addr]");
+    if (td && td.dataset.addr !== selected) select(td.dataset.addr, true);
+  });
+  document.addEventListener("pointerup", () => {
+    if (dragging) {
+      dragging = false;
       formulaEl.focus();
       formulaEl.select();
     }
@@ -1401,7 +1558,45 @@
       if (e.key === "ArrowRight" && a.col < COLS - 1) a.col++;
       if (e.key === "ArrowLeft" && a.col > 0) a.col--;
       e.preventDefault();
-      select(formatAddr(a));
+      select(formatAddr(a), e.shiftKey);
+    } else if ((e.key === "Delete" || e.key === "Backspace") && !editing && rangeIsMulti()) {
+      e.preventDefault();
+      clearRange(sheet, selRect());
+      refreshValues();
+      scheduleSave();
+    } else if ((e.ctrlKey || e.metaKey) && !editing && ["c", "x", "v"].includes(e.key.toLowerCase())) {
+      const k = e.key.toLowerCase();
+      e.preventDefault();
+      if (k === "c" || k === "x") {
+        clip = copyRange(sheet, selRect());
+        try {
+          void navigator.clipboard?.writeText(rangeToTSV(sheet, selRect()));
+        } catch {
+        }
+        if (k === "x") {
+          clearRange(sheet, selRect());
+          scheduleSave();
+        }
+        statusEl.textContent = `${k === "x" ? "Cut" : "Copied"} ${clip.rows}\xD7${clip.cols}`;
+        refreshValues();
+      } else {
+        if (clip) {
+          pasteClip(sheet, clip, formatAddr({ col: selRect().c0, row: selRect().r0 }));
+          refreshValues();
+          scheduleSave();
+          statusEl.textContent = "Pasted (formulas rebased)";
+        } else if (navigator.clipboard?.readText) {
+          navigator.clipboard.readText().then((text) => {
+            if (!text) return;
+            pasteTSV(sheet, text, formatAddr({ col: selRect().c0, row: selRect().r0 }));
+            refreshValues();
+            scheduleSave();
+            statusEl.textContent = "Pasted values from clipboard";
+          }).catch(() => {
+            statusEl.textContent = "Clipboard read unavailable here";
+          });
+        }
+      }
     }
   });
   var hostDownloads = null;

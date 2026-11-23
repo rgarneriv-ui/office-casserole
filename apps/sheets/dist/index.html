@@ -38,6 +38,8 @@
   td.bold { font-weight: 700; }
   td.error { color: #a33b2c; font-weight: 600; }
   td.selected { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--sel); }
+  td.in-range { background: #ecf3ec; }
+  td { user-select: none; }
   footer { padding: 6px 16px; font-size: 12px; color: var(--muted); background: var(--panel);
            border-top: 1px solid var(--line); }
 </style>
@@ -70,7 +72,7 @@
   </header>
   <div class="grid-wrap"><table id="grid"></table></div>
   <footer>
-    Click a cell, type in the formula bar, Enter commits (Tab moves right; arrows navigate when not editing).
+    Click or drag to select (Shift extends); type in the formula bar, Enter commits. Ctrl/Cmd-C/X/V copy, cut and paste with Excel-style formula rebasing; Delete clears a range.
     Functions: SUM, AVERAGE, MIN, MAX, COUNT, COUNTA, IF, AND, OR, NOT, ABS, SQRT, ROUND, LEN, UPPER, LOWER, CONCAT.
     Errors show as #DIV/0!, #CYCLE!, #NAME?, #VALUE!, #PARSE!.
   </footer>

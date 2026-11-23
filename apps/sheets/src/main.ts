@@ -6,6 +6,17 @@
  */
 
 import { CellFormat, Sheet } from "../../../engines/spreadsheet-calc/src/engine";
+import {
+  ClipData,
+  Rect,
+  clearRange,
+  copyRange,
+  normalizeRect,
+  pasteClip,
+  pasteTSV,
+  rangeToTSV,
+  shiftFormula,
+} from "../../../engines/spreadsheet-calc/src/clipboard";
 import { colToName, formatAddr, parseAddr } from "../../../engines/spreadsheet-calc/src/addr";
 import { isError } from "../../../engines/spreadsheet-calc/src/types";
 import { exportXlsx, importXlsx } from "../../../engines/format-conversion/src/xlsx";
@@ -15,8 +26,31 @@ const ROWS = 40;
 const STORAGE_KEY = "casserole-sheets:v1:default";
 
 let sheet = new Sheet();
-let selected = "A1";
+let selected = "A1"; // selection focus
+let selAnchor = "A1"; // selection anchor (shift-select / drag origin)
 let editing = false;
+let dragging = false;
+let clip: ClipData | null = null;
+void shiftFormula;
+
+function selRect(): Rect {
+  return normalizeRect(selAnchor, selected);
+}
+
+function inRect(rect: Rect, col: number, row: number): boolean {
+  return row >= rect.r0 && row <= rect.r1 && col >= rect.c0 && col <= rect.c1;
+}
+
+function rangeIsMulti(): boolean {
+  const r = selRect();
+  return r.r0 !== r.r1 || r.c0 !== r.c1;
+}
+
+function eachInRect(rect: Rect, fn: (addr: string) => void): void {
+  for (let r = rect.r0; r <= rect.r1; r++) {
+    for (let c = rect.c0; c <= rect.c1; c++) fn(formatAddr({ col: c, row: r }));
+  }
+}
 
 const gridEl = document.getElementById("grid") as HTMLTableElement;
 const formulaEl = document.getElementById("formula") as HTMLInputElement;
@@ -99,14 +133,19 @@ function refreshValues(): void {
     const addr = td.dataset.addr!;
     const value = sheet.getCell(addr);
     const fmt = sheet.getFormat(addr);
+    const a = parseAddr(addr)!;
     td.textContent = sheet.getDisplay(addr);
     td.classList.toggle("error", isError(value));
     td.classList.toggle("num", typeof value === "number");
     td.classList.toggle("selected", addr === selected);
+    td.classList.toggle("in-range", rangeIsMulti() && inRect(selRect(), a.col, a.row));
     td.classList.toggle("bold", fmt.bold === true);
     td.style.textAlign = fmt.align ?? "";
   });
-  addrEl.textContent = selected;
+  const r = selRect();
+  addrEl.textContent = rangeIsMulti()
+    ? `${formatAddr({ col: r.c0, row: r.r0 })}:${formatAddr({ col: r.c1, row: r.r1 })}`
+    : selected;
   if (!editing) formulaEl.value = sheet.getInput(selected);
   syncFormatToolbar();
 }
@@ -122,26 +161,29 @@ function syncFormatToolbar(): void {
 
 document.getElementById("btn-bold")?.addEventListener("mousedown", (e) => {
   e.preventDefault();
-  sheet.setFormat(selected, { bold: sheet.getFormat(selected).bold ? null : true });
+  const turnOn = !sheet.getFormat(selected).bold;
+  eachInRect(selRect(), (addr) => sheet.setFormat(addr, { bold: turnOn ? true : null }));
   refreshValues();
   scheduleSave();
 });
 document.getElementById("fmt-num")?.addEventListener("change", (e) => {
-  sheet.setFormat(selected, { numFmt: (e.target as HTMLSelectElement).value });
+  const v = (e.target as HTMLSelectElement).value;
+  eachInRect(selRect(), (addr) => sheet.setFormat(addr, { numFmt: v }));
   refreshValues();
   scheduleSave();
   formulaEl.focus();
 });
 document.getElementById("fmt-align")?.addEventListener("change", (e) => {
   const v = (e.target as HTMLSelectElement).value;
-  sheet.setFormat(selected, { align: v === "auto" ? null : v });
+  eachInRect(selRect(), (addr) => sheet.setFormat(addr, { align: v === "auto" ? null : v }));
   refreshValues();
   scheduleSave();
   formulaEl.focus();
 });
 
-function select(addr: string): void {
+function select(addr: string, extend = false): void {
   selected = addr;
+  if (!extend) selAnchor = addr;
   editing = false;
   refreshValues();
 }
@@ -157,10 +199,21 @@ function commit(input: string, move: "down" | "right" | "none"): void {
   scheduleSave();
 }
 
-gridEl.addEventListener("click", (e) => {
+gridEl.addEventListener("pointerdown", (e) => {
   const td = (e.target as HTMLElement).closest("td[data-addr]") as HTMLTableCellElement | null;
-  if (td) {
-    select(td.dataset.addr!);
+  if (!td) return;
+  select(td.dataset.addr!, e.shiftKey);
+  dragging = true;
+  e.preventDefault();
+});
+gridEl.addEventListener("pointerover", (e) => {
+  if (!dragging) return;
+  const td = (e.target as HTMLElement).closest("td[data-addr]") as HTMLTableCellElement | null;
+  if (td && td.dataset.addr !== selected) select(td.dataset.addr!, true);
+});
+document.addEventListener("pointerup", () => {
+  if (dragging) {
+    dragging = false;
     formulaEl.focus();
     formulaEl.select();
   }
@@ -188,7 +241,44 @@ formulaEl.addEventListener("keydown", (e) => {
     if (e.key === "ArrowRight" && a.col < COLS - 1) a.col++;
     if (e.key === "ArrowLeft" && a.col > 0) a.col--;
     e.preventDefault();
-    select(formatAddr(a));
+    select(formatAddr(a), e.shiftKey);
+  } else if ((e.key === "Delete" || e.key === "Backspace") && !editing && rangeIsMulti()) {
+    e.preventDefault();
+    clearRange(sheet, selRect());
+    refreshValues();
+    scheduleSave();
+  } else if ((e.ctrlKey || e.metaKey) && !editing && ["c", "x", "v"].includes(e.key.toLowerCase())) {
+    const k = e.key.toLowerCase();
+    e.preventDefault();
+    if (k === "c" || k === "x") {
+      clip = copyRange(sheet, selRect());
+      try {
+        void navigator.clipboard?.writeText(rangeToTSV(sheet, selRect()));
+      } catch { /* clipboard write unavailable (sandbox) */ }
+      if (k === "x") {
+        clearRange(sheet, selRect());
+        scheduleSave();
+      }
+      statusEl.textContent = `${k === "x" ? "Cut" : "Copied"} ${clip.rows}\u00d7${clip.cols}`;
+      refreshValues();
+    } else {
+      if (clip) {
+        pasteClip(sheet, clip, formatAddr({ col: selRect().c0, row: selRect().r0 }));
+        refreshValues();
+        scheduleSave();
+        statusEl.textContent = "Pasted (formulas rebased)";
+      } else if (navigator.clipboard?.readText) {
+        navigator.clipboard.readText().then((text) => {
+          if (!text) return;
+          pasteTSV(sheet, text, formatAddr({ col: selRect().c0, row: selRect().r0 }));
+          refreshValues();
+          scheduleSave();
+          statusEl.textContent = "Pasted values from clipboard";
+        }).catch(() => {
+          statusEl.textContent = "Clipboard read unavailable here";
+        });
+      }
+    }
   }
 });
 
