@@ -115,3 +115,28 @@ test("fill: formulas shift relative refs down the lane; formats travel; fill-rig
   fillRange(s, { r0: 0, c0: 3, r1: 0, c1: 4 }, { r0: 0, c0: 5, r1: 0, c1: 7 });
   assert.deepEqual(["F1", "G1", "H1"].map((a) => s.getCell(a)), [15, 20, 25]);
 });
+
+// ---------- range sort (WO-41) ----------
+import { sortRange } from "../src/clipboard";
+
+test("sort: numbers before text, empties last, rows move whole, formulas rebase, formats travel", () => {
+  const s = new Sheet();
+  // A: key, B: data, C: formula on same row
+  s.setCell("A1", "banana"); s.setCell("B1", "10"); s.setCell("C1", "=B1*2");
+  s.setCell("A2", "3");      s.setCell("B2", "20"); s.setCell("C2", "=B2*2");
+  s.setCell("A3", "");       s.setCell("B3", "30");
+  s.setCell("A4", "Apple");  s.setCell("B4", "40"); s.setCell("C4", "=B4*2");
+  s.setCell("A5", "1");      s.setCell("B5", "50"); s.setCell("C5", "=B5*2");
+  s.setFormat("B5", { bold: true });
+  sortRange(s, { r0: 0, c0: 0, r1: 4, c1: 2 });
+  // expected order: 1, 3 (numbers), Apple, banana (case-insensitive text), empty
+  assert.deepEqual(["A1","A2","A3","A4","A5"].map((a) => s.getCell(a)), [1, 3, "Apple", "banana", null]);
+  assert.deepEqual(["B1","B2","B3","B4","B5"].map((a) => s.getCell(a)), [50, 20, 40, 10, 30], "rows moved whole");
+  assert.equal(s.getInput("C1"), "=B1*2", "formula rebased to its new row");
+  assert.equal(s.getCell("C1"), 100);
+  assert.deepEqual(s.getFormat("B1"), { bold: true }, "format traveled with its row");
+  assert.deepEqual(s.getFormat("B5"), {}, "old format location cleared");
+  // descending keeps empties last
+  sortRange(s, { r0: 0, c0: 0, r1: 4, c1: 2 }, true);
+  assert.deepEqual(["A1","A2","A3","A4","A5"].map((a) => s.getCell(a)), ["banana", "Apple", 3, 1, null]);
+});

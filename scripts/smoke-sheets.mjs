@@ -164,3 +164,25 @@ console.log("SMOKE OK — multi-area selection");
   assert(doc.getElementById("status").textContent.includes("Copied"), "ribbon Copy drives the real clipboard path");
 }
 console.log("SMOKE OK — Sheets ribbon");
+
+// ribbon sort: select a range, Sort A→Z reorders rows
+{
+  const td = (a) => doc.querySelector(`td[data-addr="${a}"]`);
+  const formula5 = doc.getElementById("formula");
+  for (const [addr, v] of [["J2","c"],["J3","a"],["J4","b"],["K2","3"],["K3","1"],["K4","2"]]) {
+    td(addr).dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
+    doc.dispatchEvent(new dom.window.MouseEvent("pointerup", { bubbles: true }));
+    formula5.value = v;
+    formula5.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    formula5.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  }
+  td("J2").dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
+  td("K4").dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true, cancelable: true, shiftKey: true }));
+  doc.dispatchEvent(new dom.window.MouseEvent("pointerup", { bubbles: true }));
+  const sortBtn = [...doc.querySelectorAll("#ribbon button")].find((b) => b.textContent.includes("Sort A→Z"));
+  assert(sortBtn && !sortBtn.disabled, "Sort A→Z live in the ribbon");
+  sortBtn.click();
+  assert([td("J2"),td("J3"),td("J4")].map((t) => t.textContent).join(",") === "a,b,c", "rows sorted by first column");
+  assert([td("K2"),td("K3"),td("K4")].map((t) => t.textContent).join(",") === "1,2,3", "companion column moved with its rows");
+}
+console.log("SMOKE OK — ribbon sort");

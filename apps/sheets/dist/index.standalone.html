@@ -996,6 +996,40 @@
       }
     }
   }
+  function sortRange(sheet2, rect, descending = false) {
+    const rows = [];
+    for (let r = rect.r0; r <= rect.r1; r++) {
+      const cells = [];
+      for (let c = rect.c0; c <= rect.c1; c++) {
+        const addr = formatAddr({ col: c, row: r });
+        cells.push({ input: sheet2.getInput(addr), format: sheet2.getFormat(addr), srcRow: r });
+      }
+      rows.push({ key: sheet2.getCell(formatAddr({ col: rect.c0, row: r })), cells });
+    }
+    const rank = (k) => k === null || k === "" ? 2 : typeof k === "number" ? 0 : 1;
+    rows.sort((a, b) => {
+      const ra = rank(a.key);
+      const rb = rank(b.key);
+      if (ra === 2 || rb === 2) return ra - rb;
+      if (ra !== rb) return descending ? rb - ra : ra - rb;
+      let cmp;
+      if (ra === 0) cmp = a.key - b.key;
+      else cmp = String(a.key).localeCompare(String(b.key), void 0, { sensitivity: "base" });
+      return descending ? -cmp : cmp;
+    });
+    rows.forEach((row, i) => {
+      const destRow = rect.r0 + i;
+      row.cells.forEach((cell, j) => {
+        const addr = formatAddr({ col: rect.c0 + j, row: destRow });
+        let input = cell.input;
+        if (input.startsWith("=")) {
+          input = "=" + shiftFormula(input.slice(1), destRow - cell.srcRow, 0);
+        }
+        sheet2.setCell(addr, input);
+        sheet2.setFormat(addr, Object.keys(cell.format).length > 0 ? cell.format : { bold: null, align: null, numFmt: null });
+      });
+    });
+  }
 
   // engines/format-conversion/src/zip.ts
   var CRC_TABLE = (() => {
@@ -2136,7 +2170,27 @@
                 formulaEl.focus();
               } },
               { kind: "move", id: "btn-clear", label: "Clear" },
-              { kind: "ph", label: "Sort & Filter", icon: "\u21C5" },
+              { kind: "action", label: "Sort A\u2192Z", icon: "\u21E9", title: "Sort the selected range by its first column, ascending", onClick: () => {
+                if (!rangeIsMulti()) {
+                  statusEl.textContent = "Select a range to sort";
+                  return;
+                }
+                sortRange(sheet, selRect());
+                refreshValues();
+                scheduleSave();
+                statusEl.textContent = "Sorted A\u2192Z";
+              } },
+              { kind: "action", label: "Sort Z\u2192A", icon: "\u21E7", title: "Sort the selected range by its first column, descending", onClick: () => {
+                if (!rangeIsMulti()) {
+                  statusEl.textContent = "Select a range to sort";
+                  return;
+                }
+                sortRange(sheet, selRect(), true);
+                refreshValues();
+                scheduleSave();
+                statusEl.textContent = "Sorted Z\u2192A";
+              } },
+              { kind: "ph", label: "Filter", icon: "\u23F7" },
               { kind: "ph", label: "Find & Select", icon: "\u{1F50D}" }
             ]
           }

@@ -234,3 +234,48 @@ export function fillRange(sheet: Sheet, src: Rect, dest: Rect): void {
     }
   }
 }
+
+// ---------- range sort (WO-41) ----------
+
+/**
+ * Sort the rows of a rectangle by its first column (Excel's default
+ * sort-by-leftmost). Whole rows of the range move together: inputs and
+ * formats travel, and formulas are rebased by their row delta so relative
+ * references stay pointed at the same relative targets ($ anchors pin),
+ * matching fill/paste semantics. Numbers sort before text; empty cells last.
+ */
+export function sortRange(sheet: Sheet, rect: Rect, descending = false): void {
+  const rows: { key: unknown; cells: { input: string; format: CellFormat; srcRow: number }[] }[] = [];
+  for (let r = rect.r0; r <= rect.r1; r++) {
+    const cells = [];
+    for (let c = rect.c0; c <= rect.c1; c++) {
+      const addr = formatAddr({ col: c, row: r });
+      cells.push({ input: sheet.getInput(addr), format: sheet.getFormat(addr), srcRow: r });
+    }
+    rows.push({ key: sheet.getCell(formatAddr({ col: rect.c0, row: r })), cells });
+  }
+  const rank = (k: unknown): number =>
+    k === null || k === "" ? 2 : typeof k === "number" ? 0 : 1;
+  rows.sort((a, b) => {
+    const ra = rank(a.key);
+    const rb = rank(b.key);
+    if (ra === 2 || rb === 2) return ra - rb; // empties always last, even descending
+    if (ra !== rb) return descending ? rb - ra : ra - rb; // Excel: text before numbers when descending
+    let cmp: number;
+    if (ra === 0) cmp = (a.key as number) - (b.key as number);
+    else cmp = String(a.key).localeCompare(String(b.key), undefined, { sensitivity: "base" });
+    return descending ? -cmp : cmp;
+  });
+  rows.forEach((row, i) => {
+    const destRow = rect.r0 + i;
+    row.cells.forEach((cell, j) => {
+      const addr = formatAddr({ col: rect.c0 + j, row: destRow });
+      let input = cell.input;
+      if (input.startsWith("=")) {
+        input = "=" + shiftFormula(input.slice(1), destRow - cell.srcRow, 0);
+      }
+      sheet.setCell(addr, input);
+      sheet.setFormat(addr, Object.keys(cell.format).length > 0 ? cell.format : { bold: null, align: null, numFmt: null });
+    });
+  });
+}

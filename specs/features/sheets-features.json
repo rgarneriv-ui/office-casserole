@@ -404,5 +404,38 @@
     "verification": "jsdom smoke; not independently reviewed",
     "baseline": "Microsoft Office ribbon (structure + implemented-command subset)",
     "offlineSupport": true
+  },
+  {
+    "id": "SHEETS-SORT-001",
+    "name": "Range sort",
+    "application": "sheets",
+    "description": "Sort A\u2192Z / Z\u2192A in the ribbon Editing group: sorts the selected range by its first column. Whole rows move together; formulas are rebased by their row delta ($ anchors pin); formats travel and vacated formats clear. Numbers before text ascending, text before numbers descending, empties always last (Excel semantics).",
+    "status": "tested",
+    "owner": "ai",
+    "priority": "P2",
+    "dependencies": [
+      "SHEETS-RANGE-001"
+    ],
+    "commands": [
+      "sortRange"
+    ],
+    "acceptance": [
+      "mixed numbers/text/empty sort in Excel order both directions",
+      "companion columns move with their rows",
+      "formulas recalc correctly at new rows",
+      "formats travel; old locations cleared"
+    ],
+    "edgeCases": [
+      "case-insensitive text compare",
+      "single-cell selection refused with a status message"
+    ],
+    "knownLimitations": [
+      "sorts by the first column only (no sort-by-column picker, no multi-key)",
+      "no filter"
+    ],
+    "evidence": "engines/spreadsheet-calc/test/clipboard.test.ts sort suite; scripts/smoke-sheets.mjs ribbon-sort scenario",
+    "verification": "unit + jsdom smoke; not independently reviewed",
+    "baseline": "Excel sort (leftmost-column subset)",
+    "offlineSupport": true
   }
 ]

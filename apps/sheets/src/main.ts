@@ -12,6 +12,7 @@ import {
   clearRange,
   copyRange,
   fillRange,
+  sortRange,
   normalizeRect,
   pasteClip,
   pasteTSV,
@@ -648,7 +649,21 @@ buildRibbon(
               formulaEl.focus();
             } },
             { kind: "move", id: "btn-clear", label: "Clear" },
-            { kind: "ph", label: "Sort & Filter", icon: "⇅" },
+            { kind: "action", label: "Sort A→Z", icon: "⇩", title: "Sort the selected range by its first column, ascending", onClick: () => {
+              if (!rangeIsMulti()) { statusEl.textContent = "Select a range to sort"; return; }
+              sortRange(sheet, selRect());
+              refreshValues();
+              scheduleSave();
+              statusEl.textContent = "Sorted A→Z";
+            } },
+            { kind: "action", label: "Sort Z→A", icon: "⇧", title: "Sort the selected range by its first column, descending", onClick: () => {
+              if (!rangeIsMulti()) { statusEl.textContent = "Select a range to sort"; return; }
+              sortRange(sheet, selRect(), true);
+              refreshValues();
+              scheduleSave();
+              statusEl.textContent = "Sorted Z→A";
+            } },
+            { kind: "ph", label: "Filter", icon: "⏷" },
             { kind: "ph", label: "Find & Select", icon: "🔍" },
           ],
         },
