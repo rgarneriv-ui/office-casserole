@@ -140,3 +140,50 @@ test("sort: numbers before text, empties last, rows move whole, formulas rebase,
   sortRange(s, { r0: 0, c0: 0, r1: 4, c1: 2 }, true);
   assert.deepEqual(["A1","A2","A3","A4","A5"].map((a) => s.getCell(a)), ["banana", "Apple", 3, 1, null]);
 });
+
+// ---------- structural edits (WO-42B) ----------
+import { shiftStructure } from "../src/clipboard";
+
+test("insert row: cells shift, formulas sheet-wide rewrite, anchors shift too, heights travel", () => {
+  const s = new Sheet();
+  s.setCell("A1", "top");
+  s.setCell("A2", "10");
+  s.setCell("A3", "=A2*2");
+  s.setCell("B1", "=SUM(A2:A3)");
+  s.setFormat("A2", { bold: true });
+  s.setRowHeight(1, 30);
+  shiftStructure(s, "row", 1, 1); // insert one row above row 2
+  assert.equal(s.getCell("A1"), "top");
+  assert.equal(s.getCell("A2"), null, "new empty row");
+  assert.equal(s.getCell("A3"), 10, "shifted down");
+  assert.equal(s.getInput("A4"), "=A3*2");
+  assert.equal(s.getCell("A4"), 20);
+  assert.equal(s.getInput("B1"), "=SUM(A3:A4)", "range endpoints rewritten");
+  assert.equal(s.getCell("B1"), 30);
+  assert.deepEqual(s.getFormat("A3"), { bold: true }, "format moved");
+  assert.equal(s.getRowHeight(2), 30, "height moved");
+  assert.equal(s.getRowHeight(1), undefined);
+});
+
+test("delete row: references into the deleted zone become #REF!; delete col works", () => {
+  const s = new Sheet();
+  s.setCell("A1", "1");
+  s.setCell("A2", "2");
+  s.setCell("A3", "3");
+  s.setCell("C1", "=A2");
+  s.setCell("C3", "=A3+A1"); // lives on row 3, which survives the delete
+  shiftStructure(s, "row", 1, -1); // delete row 2
+  assert.equal(s.getCell("A2"), 3, "row 3 moved up");
+  assert.ok(String(s.getInput("C1")).includes("#REF!"), `deleted target -> #REF! (${s.getInput("C1")})`);
+  assert.equal(s.getInput("C2"), "=A2+A1", "survivor refs rewritten");
+  assert.equal(s.getCell("C2"), 4);
+  // columns
+  const t = new Sheet();
+  t.setCell("A1", "1");
+  t.setCell("B1", "2");
+  t.setCell("C1", "=B1*10");
+  shiftStructure(t, "col", 0, 1); // insert a column before A
+  assert.equal(t.getCell("B1"), 1);
+  assert.equal(t.getInput("D1"), "=C1*10");
+  assert.equal(t.getCell("D1"), 20);
+});

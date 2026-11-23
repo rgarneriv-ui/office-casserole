@@ -158,12 +158,11 @@ test("xlsx: foreign styles map by heuristic; unrepresentable aspects warn once",
     { name: "xl/worksheets/sheet1.xml", data: new TextEncoder().encode(ws) },
   ]);
   const { sheet, report } = await importXlsx(bytes, parseXml);
-  assert.deepEqual(sheet.getFormat("A1"), { numFmt: "percent", align: "center" }, "custom % code classified");
+  assert.deepEqual(sheet.getFormat("A1"), { numFmt: "percent", decimals: 1, align: "center" }, "custom % code classified with decimals");
   assert.deepEqual(sheet.getFormat("B1"), { bold: true, numFmt: "percent" }, "builtin 9 + bold");
   const styleWarnings = report.warnings.filter((w) => w.code === "XLSX-IMPORT-STYLES");
   assert.equal(styleWarnings.length, 1, "one summary warning");
   assert.ok(styleWarnings[0]!.message.includes("font i"), styleWarnings[0]!.message);
-  assert.ok(styleWarnings[0]!.message.includes("border"));
 });
 
 test("xlsx: column widths round-trip through <cols>", async () => {
@@ -192,4 +191,32 @@ test("xlsx: custom row heights round-trip (including empty rows)", async () => {
   assert.equal(back.sheet.getRowHeight(0), 30);
   assert.equal(back.sheet.getRowHeight(4), 45.5, "empty row with custom height survives");
   assert.equal(back.sheet.getRowHeight(1), undefined, "default rows untouched");
+});
+
+// ---------- rich cell formats (WO-42B) ----------
+test("xlsx: border/fill/color/wrap/comma/decimals round-trip via the dynamic style table", async () => {
+  const s = new Sheet();
+  s.setCell("A1", "1234.5678");
+  s.setFormat("A1", { numFmt: "comma", decimals: 1, border: true });
+  s.setCell("B1", "label");
+  s.setFormat("B1", { fill: "#ffe599", color: "#aa0000", wrap: true, bold: true });
+  s.setCell("C1", "0.42");
+  s.setFormat("C1", { numFmt: "percent", decimals: 0 });
+  const out = await exportXlsx(s);
+  const back = await importXlsx(out.bytes, parseXml);
+  const a = back.sheet.getFormat("A1");
+  assert.equal(a.numFmt, "comma");
+  assert.equal(a.decimals, 1);
+  assert.equal(a.border, true);
+  const b = back.sheet.getFormat("B1");
+  assert.equal(b.fill, "#ffe599");
+  assert.equal(b.color, "#aa0000");
+  assert.equal(b.wrap, true);
+  assert.equal(b.bold, true);
+  const c = back.sheet.getFormat("C1");
+  assert.equal(c.numFmt, "percent");
+  assert.equal(c.decimals, 0);
+  assert.equal(back.sheet.getDisplay("A1"), "1,234.6");
+  assert.equal(back.sheet.getDisplay("C1"), "42%");
+  assert.ok(back.report.warnings.every((w) => !w.message.includes("fill") && !w.message.includes("border")), "no drop warnings for supported formats");
 });

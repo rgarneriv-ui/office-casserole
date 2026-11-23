@@ -49,6 +49,8 @@
   td { user-select: none; }
   footer { padding: 6px 16px; font-size: 12px; color: var(--muted); background: var(--panel);
            border-top: 1px solid var(--line); }
+  td.b-box { box-shadow: inset 0 0 0 1px #444; }
+  td.wrap { white-space: normal; word-break: break-word; }
 </style>
 </head>
 <body>
@@ -64,6 +66,7 @@
       <option value="number2">Number</option>
       <option value="currency">$ Currency</option>
       <option value="percent">% Percent</option>
+      <option value="comma">, Comma</option>
     </select>
     <select id="fmt-align" title="Alignment">
       <option value="auto">Auto</option>
@@ -76,6 +79,18 @@
     <button id="btn-export-xlsx" title="Export Excel workbook (.xlsx)">↓ XLSX</button>
     <button id="btn-export-csv" title="Export visible values as CSV">↓ CSV</button>
     <button id="btn-clear" title="Clear the sheet">Clear</button>
+    <button id="btn-border" title="Toggle box borders">⊞</button>
+    <input id="fill-color" type="color" value="#ffe599" title="Fill color">
+    <button id="btn-fill-clear" title="Remove fill">⌀</button>
+    <input id="cell-color" type="color" value="#222222" title="Font color">
+    <button id="btn-wrap" title="Wrap text">↩ab</button>
+    <button id="btn-dec-less" title="Fewer decimal places">.0←</button>
+    <button id="btn-dec-more" title="More decimal places">.00→</button>
+    <button id="btn-ins-row" title="Insert a row above the selection">+Row</button>
+    <button id="btn-del-row" title="Delete the selected row(s)">−Row</button>
+    <button id="btn-ins-col" title="Insert a column left of the selection">+Col</button>
+    <button id="btn-del-col" title="Delete the selected column(s)">−Col</button>
+    <button id="btn-find" title="Find a cell by its text">🔍</button>
     <span id="status">Ready</span>
   </header>
   <div class="grid-wrap"><table id="grid"></table></div>
@@ -502,16 +517,20 @@
   }
 
   // engines/spreadsheet-calc/src/engine.ts
-  function formatNumber(v, fmt) {
-    const grouped = (n, dec) => n.toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+  function formatNumber(v, fmt, decimals) {
+    const dec = decimals !== void 0 ? Math.max(0, Math.min(10, decimals)) : 2;
+    const grouped = (n, d) => n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
     switch (fmt) {
       case "number2":
-        return grouped(v, 2);
+        return v.toFixed(dec);
+      case "comma":
+        return grouped(v, dec);
       case "currency":
-        return v < 0 ? `-$${grouped(-v, 2)}` : `$${grouped(v, 2)}`;
+        return v < 0 ? `-$${grouped(-v, dec)}` : `$${grouped(v, dec)}`;
       case "percent":
-        return `${grouped(v * 100, 2)}%`;
+        return `${grouped(v * 100, dec)}%`;
       default:
+        if (decimals !== void 0) return v.toFixed(dec);
         return Number.isInteger(v) ? String(v) : String(Math.round(v * 1e10) / 1e10);
     }
   }
@@ -598,7 +617,7 @@
       if (isError(v)) return v.code;
       if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
       if (typeof v === "number") {
-        return formatNumber(v, this.getFormat(ref).numFmt ?? "general");
+        return formatNumber(v, this.getFormat(ref).numFmt ?? "general", this.getFormat(ref).decimals);
       }
       return v;
     }
@@ -1030,6 +1049,78 @@
       });
     });
   }
+  function mapRefs(body, mapper) {
+    let tokens;
+    try {
+      tokens = tokenize(body);
+    } catch {
+      return body;
+    }
+    const edits = [];
+    tokens.forEach((tok, i) => {
+      if (tok.kind !== "ident") return;
+      if (tokens[i + 1]?.kind === "op" && tokens[i + 1]?.text === "(") return;
+      const m = REF_RE.exec(tok.text);
+      if (!m || !parseAddr(tok.text)) return;
+      const colAnchored = m[1] === "$";
+      const rowAnchored = m[3] === "$";
+      const mapped = mapper(nameToCol(m[2]), parseInt(m[4], 10) - 1);
+      const repl = mapped === null ? "#REF!" : `${colAnchored ? "$" : ""}${colToName(mapped.col)}${rowAnchored ? "$" : ""}${mapped.row + 1}`;
+      if (repl !== tok.text) edits.push({ start: tok.pos, end: tok.pos + tok.text.length, repl });
+    });
+    let out = "";
+    let cursor = 0;
+    for (const e of edits) {
+      out += body.slice(cursor, e.start) + e.repl;
+      cursor = e.end;
+    }
+    return out + body.slice(cursor);
+  }
+  function shiftStructure(sheet2, axis, at, count) {
+    if (count === 0) return;
+    const delFrom = count < 0 ? at : Infinity;
+    const delTo = count < 0 ? at - count - 1 : -Infinity;
+    const mapIndex = (i) => {
+      if (i >= delFrom && i <= delTo) return null;
+      return i >= at ? i + count : i;
+    };
+    const mapper = (col, row) => {
+      const v = axis === "row" ? mapIndex(row) : mapIndex(col);
+      if (v === null) return null;
+      return axis === "row" ? { col, row: v } : { col: v, row };
+    };
+    const fix = (col, row) => axis === "row" ? { col, row: mapIndex(row) } : { col: mapIndex(col), row };
+    const cells = sheet2.entries().map((e) => ({ ...e, a: parseAddr(e.addr) }));
+    for (const c of cells) {
+      sheet2.setCell(c.addr, "");
+      sheet2.setFormat(c.addr, { bold: null, align: null, numFmt: null, decimals: null, border: null, fill: null, color: null, wrap: null });
+    }
+    for (const c of cells) {
+      const idx = axis === "row" ? c.a.row : c.a.col;
+      if (mapIndex(idx) === null) continue;
+      const dest = fix(c.a.col, c.a.row);
+      let input = c.input;
+      if (input.startsWith("=")) input = "=" + mapRefs(input.slice(1), mapper);
+      const addr = formatAddr(dest);
+      sheet2.setCell(addr, input);
+      if (c.format && Object.keys(c.format).length > 0) sheet2.setFormat(addr, c.format);
+    }
+    if (axis === "row") {
+      const hs = sheet2.rows();
+      for (const h of hs) sheet2.setRowHeight(h.row, null);
+      for (const h of hs) {
+        const to = mapIndex(h.row);
+        if (to !== null) sheet2.setRowHeight(to, h.height);
+      }
+    } else {
+      const ws = sheet2.cols();
+      for (const w of ws) sheet2.setColWidth(w.col, null);
+      for (const w of ws) {
+        const to = mapIndex(w.col);
+        if (to !== null) sheet2.setColWidth(to, w.width);
+      }
+    }
+  }
 
   // engines/format-conversion/src/zip.ts
   var CRC_TABLE = (() => {
@@ -1196,28 +1287,91 @@
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="Sheet1" sheetId="1" r:id="rId1"/></sheets></workbook>`;
   var XLSX_WORKBOOK_RELS = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>`;
-  var NUM_FMT_CODES = {
-    number2: { id: 164, code: "#,##0.00" },
-    currency: { id: 165, code: "&quot;$&quot;#,##0.00" },
-    percent: { id: 166, code: "0.00%" }
+  var StyleTable = class {
+    constructor() {
+      __publicField(this, "keys", /* @__PURE__ */ new Map());
+      __publicField(this, "fonts", [{ bold: false }]);
+      __publicField(this, "fills", [null, "gray125"]);
+      __publicField(this, "borders", [false]);
+      __publicField(this, "numFmts", /* @__PURE__ */ new Map());
+      // code -> id
+      __publicField(this, "xfs", [
+        { fontId: 0, fillId: 0, borderId: 0, numFmtId: 0 }
+      ]);
+      __publicField(this, "nextNumFmtId", 170);
+    }
+    indexFor(format) {
+      if (!format || Object.keys(format).length === 0) return 0;
+      const key = JSON.stringify([format.bold ?? false, format.color ?? "", format.fill ?? "", format.border ?? false, format.numFmt ?? "", format.decimals ?? "", format.align ?? "", format.wrap ?? false]);
+      const hit = this.keys.get(key);
+      if (hit !== void 0) return hit;
+      let fontId = this.fonts.findIndex((f) => f.bold === !!format.bold && f.color === format.color);
+      if (fontId < 0) {
+        fontId = this.fonts.length;
+        this.fonts.push({ bold: !!format.bold, color: format.color });
+      }
+      let fillId = 0;
+      if (format.fill) {
+        const idx = this.fills.indexOf(format.fill);
+        fillId = idx >= 0 ? idx : this.fills.push(format.fill) - 1;
+      }
+      let borderId = 0;
+      if (format.border) {
+        const idx = this.borders.indexOf(true);
+        borderId = idx >= 0 ? idx : this.borders.push(true) - 1;
+      }
+      let numFmtId = 0;
+      const code = numFmtCode(format.numFmt, format.decimals);
+      if (code) {
+        const existing = this.numFmts.get(code);
+        numFmtId = existing ?? this.nextNumFmtId++;
+        if (existing === void 0) this.numFmts.set(code, numFmtId);
+      }
+      const xf = { fontId, fillId, borderId, numFmtId };
+      if (format.align) xf.align = format.align;
+      if (format.wrap) xf.wrap = true;
+      const index = this.xfs.push(xf) - 1;
+      this.keys.set(key, index);
+      return index;
+    }
+    xml() {
+      const numFmts = [...this.numFmts.entries()].map(([code, id]) => `<numFmt numFmtId="${id}" formatCode="${xmlEscape(code)}"/>`).join("");
+      const fonts = this.fonts.map((f) => `<font>${f.bold ? "<b/>" : ""}${f.color ? `<color rgb="FF${f.color.replace("#", "").toUpperCase()}"/>` : ""}<sz val="11"/><name val="Calibri"/></font>`).join("");
+      const fills = this.fills.map((f, i) => {
+        if (i === 0) return `<fill><patternFill patternType="none"/></fill>`;
+        if (i === 1) return `<fill><patternFill patternType="gray125"/></fill>`;
+        return `<fill><patternFill patternType="solid"><fgColor rgb="FF${String(f).replace("#", "").toUpperCase()}"/><bgColor indexed="64"/></patternFill></fill>`;
+      }).join("");
+      const edge = `<left style="thin"><color auto="1"/></left><right style="thin"><color auto="1"/></right><top style="thin"><color auto="1"/></top><bottom style="thin"><color auto="1"/></bottom><diagonal/>`;
+      const borders = this.borders.map((b) => b ? `<border>${edge}</border>` : `<border><left/><right/><top/><bottom/><diagonal/></border>`).join("");
+      const xfs = this.xfs.map((x, i) => {
+        if (i === 0) return `<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>`;
+        const align = x.align || x.wrap ? `<alignment${x.align ? ` horizontal="${x.align}"` : ""}${x.wrap ? ` wrapText="1"` : ""}/>` : "";
+        return `<xf numFmtId="${x.numFmtId}" fontId="${x.fontId}" fillId="${x.fillId}" borderId="${x.borderId}" xfId="0"${x.fontId ? ` applyFont="1"` : ""}${x.fillId > 1 ? ` applyFill="1"` : ""}${x.borderId ? ` applyBorder="1"` : ""}${x.numFmtId ? ` applyNumberFormat="1"` : ""}${align ? ` applyAlignment="1"` : ""}>${align}</xf>`;
+      }).join("");
+      return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` + (numFmts ? `<numFmts count="${this.numFmts.size}">${numFmts}</numFmts>` : "") + `<fonts count="${this.fonts.length}">${fonts}</fonts><fills count="${this.fills.length}">${fills}</fills><borders count="${this.borders.length}">${borders}</borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="${this.xfs.length}">${xfs}</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
+    }
   };
-  var XF_NUMFMTS = ["general", "number2", "currency", "percent"];
-  function styleIndexFor(format) {
-    if (!format || !format.bold && !format.numFmt) return 0;
-    const fontBit = format.bold ? 1 : 0;
-    const nf = XF_NUMFMTS.indexOf(format.numFmt ?? "general");
-    return 1 + fontBit * 4 + Math.max(0, nf);
+  function numFmtCode(fmt, decimals) {
+    const d = decimals !== void 0 ? Math.max(0, Math.min(10, decimals)) : 2;
+    const zeros = d > 0 ? "." + "0".repeat(d) : "";
+    switch (fmt) {
+      case "number2":
+        return `0${zeros}`;
+      case "comma":
+        return `#,##0${zeros}`;
+      case "currency":
+        return `"$"#,##0${zeros}`;
+      case "percent":
+        return `0${zeros}%`;
+      default:
+        return decimals !== void 0 ? `0${zeros}` : null;
+    }
   }
-  var XLSX_STYLES = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><numFmts count="3">` + Object.values(NUM_FMT_CODES).map((f) => `<numFmt numFmtId="${f.id}" formatCode="${f.code}"/>`).join("") + `</numFmts><fonts count="2"><font><sz val="11"/><name val="Calibri"/></font><font><b/><sz val="11"/><name val="Calibri"/></font></fonts><fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills><borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellXfs count="9"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>` + [0, 1].map(
-    (fontId) => XF_NUMFMTS.map((nf) => {
-      const numFmtId = nf === "general" ? 0 : NUM_FMT_CODES[nf].id;
-      return `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="0" borderId="0" xfId="0" applyFont="${fontId}" applyNumberFormat="${numFmtId ? 1 : 0}"/>`;
-    }).join("")
-  ).join("") + `</cellXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles></styleSheet>`;
-  function cellXml(addr, input, sheet2) {
+  function cellXml(addr, input, sheet2, styles) {
     const value = sheet2.getCell(addr);
-    const si = styleIndexFor(sheet2.getFormat(addr));
+    const si = styles.indexFor(sheet2.getFormat(addr));
     const sAttr = si > 0 ? ` s="${si}"` : "";
     if (input.startsWith("=")) {
       const f = `<f>${xmlEscape(input.slice(1))}</f>`;
@@ -1236,10 +1390,11 @@
     return null;
   }
   async function exportXlsx(sheet2) {
+    const styles = new StyleTable();
     const rows = /* @__PURE__ */ new Map();
     for (const { addr, input } of sheet2.entries()) {
       const a = parseAddr(addr);
-      const xml = cellXml(addr, input, sheet2);
+      const xml = cellXml(addr, input, sheet2, styles);
       if (!xml) continue;
       if (!rows.has(a.row)) rows.set(a.row, []);
       rows.get(a.row).push({ col: a.col, xml });
@@ -1261,7 +1416,7 @@
       { name: "_rels/.rels", data: textEncoder2.encode(XLSX_ROOT_RELS) },
       { name: "xl/workbook.xml", data: textEncoder2.encode(XLSX_WORKBOOK) },
       { name: "xl/_rels/workbook.xml.rels", data: textEncoder2.encode(XLSX_WORKBOOK_RELS) },
-      { name: "xl/styles.xml", data: textEncoder2.encode(XLSX_STYLES) },
+      { name: "xl/styles.xml", data: textEncoder2.encode(styles.xml()) },
       { name: "xl/worksheets/sheet1.xml", data: textEncoder2.encode(sheetXml) }
     ];
     return { bytes: await zipWrite(entries), report: { format: "xlsx", lossless: true, warnings: [] } };
@@ -1311,10 +1466,30 @@
         if (fontsEl) {
           for (const f of descendants(fontsEl, "font")) {
             const names = Array.from(f.children).map((c) => c.localName);
+            const colorEl = descendants(f, "color")[0];
+            const rgb = colorEl?.getAttribute("rgb");
             fonts.push({
               bold: names.includes("b"),
-              other: names.filter((n) => ["i", "u", "strike", "color"].includes(n))
+              color: rgb && rgb.length === 8 ? `#${rgb.slice(2).toLowerCase()}` : void 0,
+              other: names.filter((n) => ["i", "u", "strike"].includes(n))
             });
+          }
+        }
+        const fillColors = [];
+        const fillsEl = descendants(dom, "fills")[0];
+        if (fillsEl) {
+          for (const f of descendants(fillsEl, "fill")) {
+            const pf = descendants(f, "patternFill")[0];
+            const fg = pf && pf.getAttribute("patternType") === "solid" ? descendants(pf, "fgColor")[0] : null;
+            const rgb = fg?.getAttribute("rgb");
+            fillColors.push(rgb && rgb.length === 8 ? `#${rgb.slice(2).toLowerCase()}` : void 0);
+          }
+        }
+        const borderHas = [];
+        const bordersEl = descendants(dom, "borders")[0];
+        if (bordersEl) {
+          for (const b of descendants(bordersEl, "border")) {
+            borderHas.push(Array.from(b.children).some((e) => e.getAttribute("style")));
           }
         }
         const BUILTIN_NUMFMT = {
@@ -1335,9 +1510,11 @@
           if (BUILTIN_NUMFMT[id]) return { fmt: BUILTIN_NUMFMT[id] };
           const code = numFmtCodes.get(id);
           if (code !== void 0) {
-            if (code.includes("%")) return { fmt: "percent" };
-            if (code.includes("$") || code.includes("\xA4") || code.toLowerCase().includes("[$")) return { fmt: "currency" };
-            if (/^#,##0\.0+$|^0\.0+$|^#,##0$/.test(code)) return { fmt: "number2" };
+            const dec = /\.(0+)/.exec(code)?.[1]?.length ?? 0;
+            if (code.includes("%")) return { fmt: "percent", decimals: dec };
+            if (code.includes("$") || code.includes("\xA4") || code.toLowerCase().includes("[$")) return { fmt: "currency", decimals: dec };
+            if (/^#,##0(\.0+)?$/.test(code)) return { fmt: "comma", decimals: dec };
+            if (/^0(\.0+)?$/.test(code)) return { fmt: "number2", decimals: dec };
             return { dropped: `number format "${code}"` };
           }
           return { dropped: `number format id ${id}` };
@@ -1348,17 +1525,21 @@
             const info = { format: {}, dropped: [] };
             const font = fonts[Number(xf.getAttribute("fontId") ?? 0)];
             if (font?.bold) info.format.bold = true;
+            if (font?.color) info.format.color = font.color;
             if (font && font.other.length > 0) info.dropped.push(...font.other.map((n) => `font ${n}`));
             const nf = classifyNumFmt(Number(xf.getAttribute("numFmtId") ?? 0));
             if (nf.fmt) info.format.numFmt = nf.fmt;
+            if (nf.fmt && nf.decimals !== void 0 && nf.decimals !== 2) info.format.decimals = nf.decimals;
             if (nf.dropped) info.dropped.push(nf.dropped);
             const alignEl = descendants(xf, "alignment")[0];
             const horizontal = alignEl?.getAttribute("horizontal");
             if (horizontal === "left" || horizontal === "center" || horizontal === "right") {
               info.format.align = horizontal;
             }
-            if (Number(xf.getAttribute("fillId") ?? 0) > 1) info.dropped.push("fill");
-            if (Number(xf.getAttribute("borderId") ?? 0) > 0) info.dropped.push("border");
+            if (alignEl?.getAttribute("wrapText") === "1") info.format.wrap = true;
+            const fillColor = fillColors[Number(xf.getAttribute("fillId") ?? 0)];
+            if (fillColor) info.format.fill = fillColor;
+            if (borderHas[Number(xf.getAttribute("borderId") ?? 0)]) info.format.border = true;
             xfTable.push(info);
           }
         }
@@ -1771,7 +1952,11 @@
       td.classList.toggle("in-range", (rangeIsMulti() || multiArea()) && inAnyArea(a.col, a.row));
       td.classList.toggle("fill-preview", fillActive && fillDrag.dest !== null && inRect(fillDrag.dest, a.col, a.row));
       td.classList.toggle("bold", fmt.bold === true);
+      td.classList.toggle("b-box", fmt.border === true);
+      td.classList.toggle("wrap", fmt.wrap === true);
       td.style.textAlign = fmt.align ?? "";
+      td.style.background = fmt.fill ?? "";
+      td.style.color = fmt.color ?? "";
     });
     gridEl.querySelectorAll(".fill-grip").forEach((el) => el.remove());
     const rr = selRect();
@@ -1804,6 +1989,87 @@
     eachSelected((addr) => sheet.setFormat(addr, { bold: turnOn ? true : null }));
     refreshValues();
     scheduleSave();
+  });
+  document.getElementById("btn-border")?.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    const turnOn = !sheet.getFormat(selected).border;
+    eachSelected((addr) => sheet.setFormat(addr, { border: turnOn ? true : null }));
+    refreshValues();
+    scheduleSave();
+  });
+  document.getElementById("btn-wrap")?.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    const turnOn = !sheet.getFormat(selected).wrap;
+    eachSelected((addr) => sheet.setFormat(addr, { wrap: turnOn ? true : null }));
+    refreshValues();
+    scheduleSave();
+  });
+  document.getElementById("fill-color")?.addEventListener("change", (e) => {
+    const v = e.target.value;
+    eachSelected((addr) => sheet.setFormat(addr, { fill: v }));
+    refreshValues();
+    scheduleSave();
+  });
+  document.getElementById("btn-fill-clear")?.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    eachSelected((addr) => sheet.setFormat(addr, { fill: null }));
+    refreshValues();
+    scheduleSave();
+  });
+  document.getElementById("cell-color")?.addEventListener("change", (e) => {
+    const v = e.target.value;
+    eachSelected((addr) => sheet.setFormat(addr, { color: v }));
+    refreshValues();
+    scheduleSave();
+  });
+  function bumpDecimals(delta) {
+    eachSelected((addr) => {
+      const f = sheet.getFormat(addr);
+      const cur = f.decimals ?? 2;
+      const next = Math.max(0, Math.min(10, cur + delta));
+      sheet.setFormat(addr, { decimals: next, numFmt: f.numFmt ?? "number2" });
+    });
+    refreshValues();
+    scheduleSave();
+  }
+  document.getElementById("btn-dec-less")?.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    bumpDecimals(-1);
+  });
+  document.getElementById("btn-dec-more")?.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    bumpDecimals(1);
+  });
+  function structural(axis, del) {
+    const r = selRect();
+    const at = axis === "row" ? r.r0 : r.c0;
+    const span = axis === "row" ? r.r1 - r.r0 + 1 : r.c1 - r.c0 + 1;
+    shiftStructure(sheet, axis, at, del ? -span : span);
+    selAreas = [];
+    refreshValues();
+    scheduleSave();
+    statusEl.textContent = `${del ? "Deleted" : "Inserted"} ${span} ${axis}${span > 1 ? "s" : ""}`;
+  }
+  document.getElementById("btn-ins-row")?.addEventListener("click", () => structural("row", false));
+  document.getElementById("btn-del-row")?.addEventListener("click", () => structural("row", true));
+  document.getElementById("btn-ins-col")?.addEventListener("click", () => structural("col", false));
+  document.getElementById("btn-del-col")?.addEventListener("click", () => structural("col", true));
+  document.getElementById("btn-find")?.addEventListener("click", () => {
+    const q = window.prompt("Find:");
+    if (!q) return;
+    const needle = q.toLowerCase();
+    const start = parseAddr(selected);
+    const total = ROWS * COLS;
+    for (let i = 1; i <= total; i++) {
+      const flat = (start.row * COLS + start.col + i) % total;
+      const addr = formatAddr({ col: flat % COLS, row: Math.floor(flat / COLS) });
+      if (sheet.getDisplay(addr).toLowerCase().includes(needle) || sheet.getInput(addr).toLowerCase().includes(needle)) {
+        select(addr);
+        statusEl.textContent = `Found in ${addr}`;
+        return;
+      }
+    }
+    statusEl.textContent = `"${q}" not found`;
   });
   document.getElementById("fmt-num")?.addEventListener("change", (e) => {
     const v = e.target.value;
@@ -2108,6 +2374,19 @@
       new KeyboardEvent("keydown", { key, ctrlKey: true, bubbles: true, cancelable: true })
     );
   }
+  function insertFn(names) {
+    const pick = window.prompt(`Function:
+${names.join(", ")}`, names[0]);
+    if (!pick) return;
+    const fn = pick.trim().toUpperCase();
+    if (!names.includes(fn)) {
+      statusEl.textContent = `Unknown function ${fn}`;
+      return;
+    }
+    formulaEl.value = `=${fn}(`;
+    formulaEl.dispatchEvent(new Event("input", { bubbles: true }));
+    formulaEl.focus();
+  }
   buildRibbon(
     document.getElementById("ribbon"),
     [
@@ -2131,16 +2410,17 @@
               { kind: "move", id: "btn-bold" },
               { kind: "ph", label: "I" },
               { kind: "ph", label: "U" },
-              { kind: "ph", label: "Borders", icon: "\u229E" },
-              { kind: "ph", label: "Fill Color", icon: "\u{1FAA3}" },
-              { kind: "ph", label: "Font Color", icon: "A" }
+              { kind: "move", id: "btn-border", label: "Borders", icon: "\u229E" },
+              { kind: "move", id: "fill-color" },
+              { kind: "move", id: "btn-fill-clear" },
+              { kind: "move", id: "cell-color" }
             ]
           },
           {
             name: "Alignment",
             controls: [
               { kind: "move", id: "fmt-align" },
-              { kind: "ph", label: "Wrap Text" },
+              { kind: "move", id: "btn-wrap", label: "Wrap" },
               { kind: "ph", label: "Merge & Center" }
             ]
           },
@@ -2148,17 +2428,17 @@
             name: "Number",
             controls: [
               { kind: "move", id: "fmt-num" },
-              { kind: "ph", label: ",", icon: "" },
-              { kind: "ph", label: ".00\u2192.0" },
-              { kind: "ph", label: ".0\u2192.00" }
+              { kind: "move", id: "btn-dec-less" },
+              { kind: "move", id: "btn-dec-more" }
             ]
           },
           {
             name: "Cells",
             controls: [
-              { kind: "ph", label: "Insert", icon: "\u2295" },
-              { kind: "ph", label: "Delete", icon: "\u2296" },
-              { kind: "ph", label: "Format", icon: "\u25A4" }
+              { kind: "move", id: "btn-ins-row", label: "Insert Row" },
+              { kind: "move", id: "btn-del-row", label: "Delete Row" },
+              { kind: "move", id: "btn-ins-col", label: "Insert Col" },
+              { kind: "move", id: "btn-del-col", label: "Delete Col" }
             ]
           },
           {
@@ -2191,7 +2471,7 @@
                 statusEl.textContent = "Sorted Z\u2192A";
               } },
               { kind: "ph", label: "Filter", icon: "\u23F7" },
-              { kind: "ph", label: "Find & Select", icon: "\u{1F50D}" }
+              { kind: "move", id: "btn-find", label: "Find", icon: "\u{1F50D}" }
             ]
           }
         ]
@@ -2215,11 +2495,10 @@
                 formulaEl.dispatchEvent(new Event("input", { bubbles: true }));
                 formulaEl.focus();
               } },
-              { kind: "ph", label: "Financial" },
-              { kind: "ph", label: "Logical" },
-              { kind: "ph", label: "Text" },
-              { kind: "ph", label: "Date & Time" },
-              { kind: "ph", label: "Lookup" }
+              { kind: "action", label: "Math \u03A3", title: "Insert SUM/AVERAGE/MIN/MAX/ROUND/ABS", onClick: () => insertFn(["SUM", "AVERAGE", "MIN", "MAX", "ROUND", "ABS"]) },
+              { kind: "action", label: "Logical ?", title: "Insert IF/AND/OR/NOT", onClick: () => insertFn(["IF", "AND", "OR", "NOT"]) },
+              { kind: "action", label: "Text Aa", title: "Insert CONCAT/LEN/UPPER/LOWER", onClick: () => insertFn(["CONCAT", "LEN", "UPPER", "LOWER"]) },
+              { kind: "action", label: "Count #", title: "Insert COUNT/COUNTA", onClick: () => insertFn(["COUNT", "COUNTA"]) }
             ]
           },
           { name: "Calculation", controls: [{ kind: "ph", label: "Calculate Now" }] }

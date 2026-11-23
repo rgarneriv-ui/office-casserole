@@ -279,3 +279,100 @@ export function sortRange(sheet: Sheet, rect: Rect, descending = false): void {
     });
   });
 }
+
+// ---------- structural edits: insert/delete rows & columns (WO-42B) ----------
+
+/** Rewrite every cell reference in a formula body through a mapper.
+ *  The mapper returns the new (col,row) or null for #REF!. Everything
+ *  else in the body (strings, spacing, operators, function names) is
+ *  preserved verbatim — same splice machinery as shiftFormula. */
+export function mapRefs(
+  body: string,
+  mapper: (col: number, row: number) => { col: number; row: number } | null
+): string {
+  let tokens;
+  try {
+    tokens = tokenize(body);
+  } catch {
+    return body;
+  }
+  const edits: { start: number; end: number; repl: string }[] = [];
+  tokens.forEach((tok, i) => {
+    if (tok.kind !== "ident") return;
+    if (tokens[i + 1]?.kind === "op" && tokens[i + 1]?.text === "(") return;
+    const m = REF_RE.exec(tok.text);
+    if (!m || !parseAddr(tok.text)) return;
+    const colAnchored = m[1] === "$";
+    const rowAnchored = m[3] === "$";
+    const mapped = mapper(nameToCol(m[2]!), parseInt(m[4]!, 10) - 1);
+    const repl = mapped === null
+      ? "#REF!"
+      : `${colAnchored ? "$" : ""}${colToName(mapped.col)}${rowAnchored ? "$" : ""}${mapped.row + 1}`;
+    if (repl !== tok.text) edits.push({ start: tok.pos, end: tok.pos + tok.text.length, repl });
+  });
+  let out = "";
+  let cursor = 0;
+  for (const e of edits) {
+    out += body.slice(cursor, e.start) + e.repl;
+    cursor = e.end;
+  }
+  return out + body.slice(cursor);
+}
+
+/**
+ * Insert (count > 0) or delete (count < 0) rows/columns at `at`, shifting
+ * everything after, Excel-style: cell contents, formats, and row heights /
+ * column widths move; formulas sheet-wide are rewritten — references into a
+ * deleted zone become #REF!, references past the zone shift.
+ */
+export function shiftStructure(sheet: Sheet, axis: "row" | "col", at: number, count: number): void {
+  if (count === 0) return;
+  const delFrom = count < 0 ? at : Infinity;
+  const delTo = count < 0 ? at - count - 1 : -Infinity; // inclusive
+  const mapIndex = (i: number): number | null => {
+    if (i >= delFrom && i <= delTo) return null; // deleted
+    return i >= at ? i + count : i;
+  };
+  const mapper = (col: number, row: number): { col: number; row: number } | null => {
+    const v = axis === "row" ? mapIndex(row) : mapIndex(col);
+    if (v === null) return null;
+    return axis === "row" ? { col, row: v } : { col: v, row };
+  };
+  const fix = (col: number, row: number) =>
+    axis === "row" ? { col, row: mapIndex(row)! } : { col: mapIndex(col)!, row };
+
+  // snapshot
+  const cells = sheet.entries().map((e) => ({ ...e, a: parseAddr(e.addr)! }));
+  // wipe
+  for (const c of cells) {
+    sheet.setCell(c.addr, "");
+    sheet.setFormat(c.addr, { bold: null, align: null, numFmt: null, decimals: null, border: null, fill: null, color: null, wrap: null });
+  }
+  // rewrite + replace
+  for (const c of cells) {
+    const idx = axis === "row" ? c.a.row : c.a.col;
+    if (mapIndex(idx) === null) continue; // the row/col itself was deleted
+    const dest = fix(c.a.col, c.a.row);
+    let input = c.input;
+    if (input.startsWith("=")) input = "=" + mapRefs(input.slice(1), mapper);
+    const addr = formatAddr(dest);
+    sheet.setCell(addr, input);
+    if (c.format && Object.keys(c.format).length > 0) sheet.setFormat(addr, c.format);
+  }
+  // sizes travel
+  if (axis === "row") {
+    const hs = sheet.rows();
+    for (const h of hs) sheet.setRowHeight(h.row, null);
+    for (const h of hs) {
+      const to = mapIndex(h.row);
+      if (to !== null) sheet.setRowHeight(to, h.height);
+    }
+  } else {
+    const ws = sheet.cols();
+    for (const w of ws) sheet.setColWidth(w.col, null);
+    for (const w of ws) {
+      const to = mapIndex(w.col);
+      if (to !== null) sheet.setColWidth(to, w.width);
+    }
+  }
+}

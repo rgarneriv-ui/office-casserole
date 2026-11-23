@@ -64,46 +64,114 @@ const NUM_FMT_CODES: Record<string, { id: number; code: string }> = {
   percent: { id: 166, code: "0.00%" },
 };
 
-/** xf table: [0]=default, then (plain|bold) x (general|number2|currency|percent). */
-const XF_NUMFMTS = ["general", "number2", "currency", "percent"] as const;
+/** Dynamic style table (WO-42B): distinct CellFormats become xf entries. */
+export class StyleTable {
+  private keys = new Map<string, number>();
+  readonly fonts: { bold: boolean; color?: string }[] = [{ bold: false }];
+  readonly fills: (string | null)[] = [null, "gray125"];
+  readonly borders: boolean[] = [false];
+  readonly numFmts = new Map<string, number>(); // code -> id
+  readonly xfs: { fontId: number; fillId: number; borderId: number; numFmtId: number; align?: string; wrap?: boolean }[] = [
+    { fontId: 0, fillId: 0, borderId: 0, numFmtId: 0 },
+  ];
+  private nextNumFmtId = 170;
 
-export function styleIndexFor(format: { bold?: boolean; numFmt?: string } | undefined): number {
-  if (!format || (!format.bold && !format.numFmt)) return 0;
-  const fontBit = format.bold ? 1 : 0;
-  const nf = XF_NUMFMTS.indexOf((format.numFmt ?? "general") as (typeof XF_NUMFMTS)[number]);
-  return 1 + fontBit * 4 + Math.max(0, nf);
+  indexFor(format: CellFormat | undefined): number {
+    if (!format || Object.keys(format).length === 0) return 0;
+    const key = JSON.stringify([format.bold ?? false, format.color ?? "", format.fill ?? "", format.border ?? false, format.numFmt ?? "", format.decimals ?? "", format.align ?? "", format.wrap ?? false]);
+    const hit = this.keys.get(key);
+    if (hit !== undefined) return hit;
+    // font
+    let fontId = this.fonts.findIndex((f) => f.bold === !!format.bold && f.color === format.color);
+    if (fontId < 0) { fontId = this.fonts.length; this.fonts.push({ bold: !!format.bold, color: format.color }); }
+    // fill
+    let fillId = 0;
+    if (format.fill) {
+      const idx = this.fills.indexOf(format.fill);
+      fillId = idx >= 0 ? idx : (this.fills.push(format.fill) - 1);
+    }
+    // border
+    let borderId = 0;
+    if (format.border) {
+      const idx = this.borders.indexOf(true);
+      borderId = idx >= 0 ? idx : (this.borders.push(true) - 1);
+    }
+    // number format
+    let numFmtId = 0;
+    const code = numFmtCode(format.numFmt, format.decimals);
+    if (code) {
+      const existing = this.numFmts.get(code);
+      numFmtId = existing ?? this.nextNumFmtId++;
+      if (existing === undefined) this.numFmts.set(code, numFmtId);
+    }
+    const xf: StyleTable["xfs"][number] = { fontId, fillId, borderId, numFmtId };
+    if (format.align) xf.align = format.align;
+    if (format.wrap) xf.wrap = true;
+    const index = this.xfs.push(xf) - 1;
+    this.keys.set(key, index);
+    return index;
+  }
+
+  xml(): string {
+    const numFmts = [...this.numFmts.entries()]
+      .map(([code, id]) => `<numFmt numFmtId="${id}" formatCode="${xmlEscape(code)}"/>`)
+      .join("");
+    const fonts = this.fonts
+      .map((f) => `<font>${f.bold ? "<b/>" : ""}${f.color ? `<color rgb="FF${f.color.replace("#", "").toUpperCase()}"/>` : ""}<sz val="11"/><name val="Calibri"/></font>`)
+      .join("");
+    const fills = this.fills
+      .map((f, i) => {
+        if (i === 0) return `<fill><patternFill patternType="none"/></fill>`;
+        if (i === 1) return `<fill><patternFill patternType="gray125"/></fill>`;
+        return `<fill><patternFill patternType="solid"><fgColor rgb="FF${String(f).replace("#", "").toUpperCase()}"/><bgColor indexed="64"/></patternFill></fill>`;
+      })
+      .join("");
+    const edge = `<left style="thin"><color auto="1"/></left><right style="thin"><color auto="1"/></right><top style="thin"><color auto="1"/></top><bottom style="thin"><color auto="1"/></bottom><diagonal/>`;
+    const borders = this.borders
+      .map((b) => (b ? `<border>${edge}</border>` : `<border><left/><right/><top/><bottom/><diagonal/></border>`))
+      .join("");
+    const xfs = this.xfs
+      .map((x, i) => {
+        if (i === 0) return `<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>`;
+        const align = x.align || x.wrap
+          ? `<alignment${x.align ? ` horizontal="${x.align}"` : ""}${x.wrap ? ` wrapText="1"` : ""}/>`
+          : "";
+        return `<xf numFmtId="${x.numFmtId}" fontId="${x.fontId}" fillId="${x.fillId}" borderId="${x.borderId}" xfId="0"` +
+          `${x.fontId ? ` applyFont="1"` : ""}${x.fillId > 1 ? ` applyFill="1"` : ""}${x.borderId ? ` applyBorder="1"` : ""}` +
+          `${x.numFmtId ? ` applyNumberFormat="1"` : ""}${align ? ` applyAlignment="1"` : ""}>${align}</xf>`;
+      })
+      .join("");
+    return (
+      `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
+      `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
+      (numFmts ? `<numFmts count="${this.numFmts.size}">${numFmts}</numFmts>` : "") +
+      `<fonts count="${this.fonts.length}">${fonts}</fonts>` +
+      `<fills count="${this.fills.length}">${fills}</fills>` +
+      `<borders count="${this.borders.length}">${borders}</borders>` +
+      `<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>` +
+      `<cellXfs count="${this.xfs.length}">${xfs}</cellXfs>` +
+      `<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>` +
+      `</styleSheet>`
+    );
+  }
 }
 
-const XLSX_STYLES =
-  `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
-  `<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">` +
-  `<numFmts count="3">` +
-  Object.values(NUM_FMT_CODES)
-    .map((f) => `<numFmt numFmtId="${f.id}" formatCode="${f.code}"/>`)
-    .join("") +
-  `</numFmts>` +
-  `<fonts count="2"><font><sz val="11"/><name val="Calibri"/></font>` +
-  `<font><b/><sz val="11"/><name val="Calibri"/></font></fonts>` +
-  `<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>` +
-  `<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>` +
-  `<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>` +
-  `<cellXfs count="9">` +
-  `<xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>` +
-  [0, 1]
-    .map((fontId) =>
-      XF_NUMFMTS.map((nf) => {
-        const numFmtId = nf === "general" ? 0 : NUM_FMT_CODES[nf]!.id;
-        return `<xf numFmtId="${numFmtId}" fontId="${fontId}" fillId="0" borderId="0" xfId="0" applyFont="${fontId}" applyNumberFormat="${numFmtId ? 1 : 0}"/>`;
-      }).join("")
-    )
-    .join("") +
-  `</cellXfs>` +
-  `<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>` +
-  `</styleSheet>`;
+function numFmtCode(fmt: CellFormat["numFmt"], decimals?: number): string | null {
+  const d = decimals !== undefined ? Math.max(0, Math.min(10, decimals)) : 2;
+  const zeros = d > 0 ? "." + "0".repeat(d) : "";
+  switch (fmt) {
+    case "number2": return `0${zeros}`;
+    case "comma": return `#,##0${zeros}`;
+    case "currency": return `"$"#,##0${zeros}`;
+    case "percent": return `0${zeros}%`;
+    default:
+      return decimals !== undefined ? `0${zeros}` : null;
+  }
+}
 
-function cellXml(addr: string, input: string, sheet: Sheet): string | null {
+function cellXml(addr: string, input: string, sheet: Sheet, styles: StyleTable): string | null {
   const value = sheet.getCell(addr);
-  const si = styleIndexFor(sheet.getFormat(addr));
+  const si = styles.indexFor(sheet.getFormat(addr));
   const sAttr = si > 0 ? ` s="${si}"` : "";
   if (input.startsWith("=")) {
     const f = `<f>${xmlEscape(input.slice(1))}</f>`;
@@ -123,11 +191,12 @@ function cellXml(addr: string, input: string, sheet: Sheet): string | null {
 }
 
 export async function exportXlsx(sheet: Sheet): Promise<{ bytes: Uint8Array; report: LossReport }> {
+  const styles = new StyleTable();
   // group non-empty cells by row
   const rows = new Map<number, { col: number; xml: string }[]>();
   for (const { addr, input } of sheet.entries()) {
     const a = parseAddr(addr)!;
-    const xml = cellXml(addr, input, sheet);
+    const xml = cellXml(addr, input, sheet, styles);
     if (!xml) continue;
     if (!rows.has(a.row)) rows.set(a.row, []);
     rows.get(a.row)!.push({ col: a.col, xml });
@@ -162,7 +231,7 @@ export async function exportXlsx(sheet: Sheet): Promise<{ bytes: Uint8Array; rep
     { name: "_rels/.rels", data: textEncoder.encode(XLSX_ROOT_RELS) },
     { name: "xl/workbook.xml", data: textEncoder.encode(XLSX_WORKBOOK) },
     { name: "xl/_rels/workbook.xml.rels", data: textEncoder.encode(XLSX_WORKBOOK_RELS) },
-    { name: "xl/styles.xml", data: textEncoder.encode(XLSX_STYLES) },
+    { name: "xl/styles.xml", data: textEncoder.encode(styles.xml()) },
     { name: "xl/worksheets/sheet1.xml", data: textEncoder.encode(sheetXml) },
   ];
   // Cell inputs and computed values are fully representable; formatting does
@@ -226,15 +295,37 @@ export async function importXlsx(
       for (const nf of descendants(dom, "numFmt")) {
         numFmtCodes.set(Number(nf.getAttribute("numFmtId")), nf.getAttribute("formatCode") ?? "");
       }
-      const fonts: { bold: boolean; other: string[] }[] = [];
+      const fonts: { bold: boolean; color?: string; other: string[] }[] = [];
       const fontsEl = descendants(dom, "fonts")[0];
       if (fontsEl) {
         for (const f of descendants(fontsEl, "font")) {
           const names = Array.from(f.children).map((c) => c.localName);
+          const colorEl = descendants(f, "color")[0];
+          const rgb = colorEl?.getAttribute("rgb");
           fonts.push({
             bold: names.includes("b"),
-            other: names.filter((n) => ["i", "u", "strike", "color"].includes(n)),
+            color: rgb && rgb.length === 8 ? `#${rgb.slice(2).toLowerCase()}` : undefined,
+            other: names.filter((n) => ["i", "u", "strike"].includes(n)),
           });
+        }
+      }
+      // fills: index -> solid color
+      const fillColors: (string | undefined)[] = [];
+      const fillsEl = descendants(dom, "fills")[0];
+      if (fillsEl) {
+        for (const f of descendants(fillsEl, "fill")) {
+          const pf = descendants(f, "patternFill")[0];
+          const fg = pf && pf.getAttribute("patternType") === "solid" ? descendants(pf, "fgColor")[0] : null;
+          const rgb = fg?.getAttribute("rgb");
+          fillColors.push(rgb && rgb.length === 8 ? `#${rgb.slice(2).toLowerCase()}` : undefined);
+        }
+      }
+      // borders: index -> has any edge
+      const borderHas: boolean[] = [];
+      const bordersEl = descendants(dom, "borders")[0];
+      if (bordersEl) {
+        for (const b of descendants(bordersEl, "border")) {
+          borderHas.push(Array.from(b.children).some((e) => e.getAttribute("style")));
         }
       }
       const BUILTIN_NUMFMT: Record<number, CellFormat["numFmt"]> = {
@@ -242,14 +333,16 @@ export async function importXlsx(
         9: "percent", 10: "percent",
         5: "currency", 6: "currency", 7: "currency", 8: "currency", 44: "currency",
       };
-      const classifyNumFmt = (id: number): { fmt?: CellFormat["numFmt"]; dropped?: string } => {
+      const classifyNumFmt = (id: number): { fmt?: CellFormat["numFmt"]; decimals?: number; dropped?: string } => {
         if (id === 0) return {};
         if (BUILTIN_NUMFMT[id]) return { fmt: BUILTIN_NUMFMT[id] };
         const code = numFmtCodes.get(id);
         if (code !== undefined) {
-          if (code.includes("%")) return { fmt: "percent" };
-          if (code.includes("$") || code.includes("\u00a4") || code.toLowerCase().includes("[$")) return { fmt: "currency" };
-          if (/^#,##0\.0+$|^0\.0+$|^#,##0$/.test(code)) return { fmt: "number2" };
+          const dec = /\.(0+)/.exec(code)?.[1]?.length ?? 0;
+          if (code.includes("%")) return { fmt: "percent", decimals: dec };
+          if (code.includes("$") || code.includes("\u00a4") || code.toLowerCase().includes("[$")) return { fmt: "currency", decimals: dec };
+          if (/^#,##0(\.0+)?$/.test(code)) return { fmt: "comma", decimals: dec };
+          if (/^0(\.0+)?$/.test(code)) return { fmt: "number2", decimals: dec };
           return { dropped: `number format "${code}"` };
         }
         return { dropped: `number format id ${id}` };
@@ -260,17 +353,21 @@ export async function importXlsx(
           const info: XfInfo = { format: {}, dropped: [] };
           const font = fonts[Number(xf.getAttribute("fontId") ?? 0)];
           if (font?.bold) info.format.bold = true;
+          if (font?.color) info.format.color = font.color;
           if (font && font.other.length > 0) info.dropped.push(...font.other.map((n) => `font ${n}`));
           const nf = classifyNumFmt(Number(xf.getAttribute("numFmtId") ?? 0));
           if (nf.fmt) info.format.numFmt = nf.fmt;
+          if (nf.fmt && nf.decimals !== undefined && nf.decimals !== 2) info.format.decimals = nf.decimals;
           if (nf.dropped) info.dropped.push(nf.dropped);
           const alignEl = descendants(xf, "alignment")[0];
           const horizontal = alignEl?.getAttribute("horizontal");
           if (horizontal === "left" || horizontal === "center" || horizontal === "right") {
             info.format.align = horizontal;
           }
-          if (Number(xf.getAttribute("fillId") ?? 0) > 1) info.dropped.push("fill");
-          if (Number(xf.getAttribute("borderId") ?? 0) > 0) info.dropped.push("border");
+          if (alignEl?.getAttribute("wrapText") === "1") info.format.wrap = true;
+          const fillColor = fillColors[Number(xf.getAttribute("fillId") ?? 0)];
+          if (fillColor) info.format.fill = fillColor;
+          if (borderHas[Number(xf.getAttribute("borderId") ?? 0)]) info.format.border = true;
           xfTable.push(info);
         }
       }

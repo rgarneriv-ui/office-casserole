@@ -186,3 +186,43 @@ console.log("SMOKE OK — Sheets ribbon");
   assert([td("K2"),td("K3"),td("K4")].map((t) => t.textContent).join(",") === "1,2,3", "companion column moved with its rows");
 }
 console.log("SMOKE OK — ribbon sort");
+
+// rich formats + structural edits via ribbon
+{
+  const td = (a) => doc.querySelector(`td[data-addr="${a}"]`);
+  const formula6 = doc.getElementById("formula");
+  const pd = (el, opts={}) => el.dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true, cancelable: true, ...opts }));
+  const pu = () => doc.dispatchEvent(new dom.window.MouseEvent("pointerup", { bubbles: true }));
+  const type = (addr, v) => {
+    pd(td(addr)); pu();
+    formula6.value = v;
+    formula6.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    formula6.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  };
+  type("L8", "1234.5678");
+  pd(td("L8")); pu();
+  // border + fill + wrap
+  doc.getElementById("btn-border").dispatchEvent(new dom.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  assert(td("L8").classList.contains("b-box"), "border class applied");
+  const fill = doc.getElementById("fill-color");
+  fill.value = "#ffe599";
+  fill.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  assert(td("L8").style.background.length > 0, "fill applied");
+  // comma + decimals
+  const fmtNum = doc.getElementById("fmt-num");
+  fmtNum.value = "comma";
+  fmtNum.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  doc.getElementById("btn-dec-less").dispatchEvent(new dom.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  assert(td("L8").textContent === "1,234.6", `comma + 1 decimal: ${td("L8").textContent}`);
+  // insert row above L8 shifts it down and rewrites nothing it shouldn't
+  type("K9", "=L8*2");
+  pd(td("L8")); pu();
+  doc.getElementById("btn-ins-row").click();
+  assert(td("L9").textContent === "1,234.6", "cell moved down with its format");
+  assert(td("L8").textContent === "", "new row empty");
+  // find jumps to a cell
+  dom.window.prompt = () => "1,234.6";
+  doc.getElementById("btn-find").click();
+  assert(doc.getElementById("status").textContent.includes("L9"), `find landed: ${doc.getElementById("status").textContent}`);
+}
+console.log("SMOKE OK — rich formats + structural edits");

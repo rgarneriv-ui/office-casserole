@@ -10,12 +10,22 @@ import { FUNCTIONS, toNumber, toText } from "./functions";
 import { FormulaError, parseFormula } from "./parse";
 import { Addr, Ast, CellValue, err, isError } from "./types";
 
-export type NumFmt = "general" | "number2" | "currency" | "percent";
+export type NumFmt = "general" | "number2" | "currency" | "percent" | "comma";
 
 export interface CellFormat {
   bold?: boolean;
   align?: "left" | "center" | "right";
   numFmt?: NumFmt;
+  /** decimal places override for numeric formats (0-10) */
+  decimals?: number;
+  /** full box border */
+  border?: boolean;
+  /** cell background, #rrggbb */
+  fill?: string;
+  /** font color, #rrggbb */
+  color?: string;
+  /** wrap text in the cell */
+  wrap?: boolean;
 }
 
 interface Cell {
@@ -29,17 +39,21 @@ interface Cell {
   dependents: Set<string>;
 }
 
-function formatNumber(v: number, fmt: NumFmt): string {
-  const grouped = (n: number, dec: number) =>
-    n.toLocaleString("en-US", { minimumFractionDigits: dec, maximumFractionDigits: dec });
+function formatNumber(v: number, fmt: NumFmt, decimals?: number): string {
+  const dec = decimals !== undefined ? Math.max(0, Math.min(10, decimals)) : 2;
+  const grouped = (n: number, d: number) =>
+    n.toLocaleString("en-US", { minimumFractionDigits: d, maximumFractionDigits: d });
   switch (fmt) {
     case "number2":
-      return grouped(v, 2);
+      return v.toFixed(dec);
+    case "comma":
+      return grouped(v, dec);
     case "currency":
-      return v < 0 ? `-$${grouped(-v, 2)}` : `$${grouped(v, 2)}`;
+      return v < 0 ? `-$${grouped(-v, dec)}` : `$${grouped(v, dec)}`;
     case "percent":
-      return `${grouped(v * 100, 2)}%`;
+      return `${grouped(v * 100, dec)}%`;
     default:
+      if (decimals !== undefined) return v.toFixed(dec);
       return Number.isInteger(v) ? String(v) : String(Math.round(v * 1e10) / 1e10);
   }
 }
@@ -140,7 +154,7 @@ export class Sheet {
     if (isError(v)) return v.code;
     if (typeof v === "boolean") return v ? "TRUE" : "FALSE";
     if (typeof v === "number") {
-      return formatNumber(v, this.getFormat(ref).numFmt ?? "general");
+      return formatNumber(v, this.getFormat(ref).numFmt ?? "general", this.getFormat(ref).decimals);
     }
     return v;
   }

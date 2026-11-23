@@ -437,5 +437,91 @@
     "verification": "unit + jsdom smoke; not independently reviewed",
     "baseline": "Excel sort (leftmost-column subset)",
     "offlineSupport": true
+  },
+  {
+    "id": "SHEETS-RICHFMT-001",
+    "name": "Rich cell formats: borders, fill, font color, wrap, comma style, decimals",
+    "application": "sheets",
+    "description": "CellFormat gains border (box), fill, color, wrap, comma number style and a decimals override (0-10). Ribbon Font/Alignment/Number groups live. XLSX round-trips via a dynamic style table (deduped fonts/fills/borders/custom numFmts); import classifies them back including decimals from format codes.",
+    "status": "tested",
+    "owner": "ai",
+    "priority": "P1",
+    "dependencies": [],
+    "commands": [],
+    "acceptance": [
+      "all five aspects + comma/decimals round-trip XLSX",
+      "openpyxl reads border=thin, fill/font ARGB, wrapText, #,##0.0 exactly",
+      "display honors decimals (1,234.6 / 42%)"
+    ],
+    "edgeCases": [
+      "style table dedupes identical formats",
+      "builtin numFmt ids keep default decimals",
+      "2-decimal default stored as absent"
+    ],
+    "knownLimitations": [
+      "border is all-edges box only (no per-edge)",
+      "no italic/underline in cells",
+      "fill import reads solid patterns only"
+    ],
+    "evidence": "xlsx test suites; openpyxl cross-validation; smoke rich-formats scenario",
+    "verification": "unit + independent openpyxl parse + jsdom smoke; not independently reviewed",
+    "baseline": "Excel cell formatting (subset)",
+    "offlineSupport": true
+  },
+  {
+    "id": "SHEETS-STRUCT-001",
+    "name": "Insert/delete rows and columns",
+    "application": "sheets",
+    "description": "shiftStructure inserts or deletes whole rows/columns at the selection (multi-row selections insert/delete that many): cells, formats and row heights/column widths move; formulas sheet-wide are rewritten through a generic ref mapper \u2014 references into a deleted zone become #REF!, later references shift, $ anchors shift too (they pin against copy, not against structure, as in Excel).",
+    "status": "tested",
+    "owner": "ai",
+    "priority": "P1",
+    "dependencies": [],
+    "commands": [
+      "shiftStructure",
+      "mapRefs"
+    ],
+    "acceptance": [
+      "insert shifts cells/formats/heights and rewrites SUM ranges",
+      "delete collapses refs to #REF! and recalcs survivors",
+      "column variant symmetric"
+    ],
+    "edgeCases": [
+      "cells on a deleted row/col are dropped entirely",
+      "unparsable formulas left verbatim"
+    ],
+    "knownLimitations": [
+      "no undo for structural edits (sheet has no transaction log yet)",
+      "grid is fixed 12x40 \u2014 no growth on insert at the edge"
+    ],
+    "evidence": "clipboard test structural suites; smoke scenario",
+    "verification": "unit + jsdom smoke; not independently reviewed",
+    "baseline": "Excel insert/delete rows/cols (subset)",
+    "offlineSupport": true
+  },
+  {
+    "id": "SHEETS-FIND-001",
+    "name": "Find + function library",
+    "application": "sheets",
+    "description": "Ribbon Find prompts for text and jumps to the next matching cell (display or input, wrapping from the selection). Formulas tab Function Library menus (Math/Logical/Text/Count) start the chosen function in the formula bar.",
+    "status": "tested",
+    "owner": "ai",
+    "priority": "P3",
+    "dependencies": [],
+    "commands": [],
+    "acceptance": [
+      "find wraps and selects the match",
+      "unknown function names refused"
+    ],
+    "edgeCases": [
+      "search covers both displayed text and raw input"
+    ],
+    "knownLimitations": [
+      "no replace; no match highlighting; prompt-based UI"
+    ],
+    "evidence": "smoke rich-formats scenario (find)",
+    "verification": "jsdom smoke; not independently reviewed",
+    "baseline": "Excel Find & Select (minimal subset)",
+    "offlineSupport": true
   }
 ]

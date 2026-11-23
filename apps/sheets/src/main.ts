@@ -12,6 +12,7 @@ import {
   clearRange,
   copyRange,
   fillRange,
+  shiftStructure,
   sortRange,
   normalizeRect,
   pasteClip,
@@ -218,7 +219,11 @@ function refreshValues(): void {
     td.classList.toggle("in-range", (rangeIsMulti() || multiArea()) && inAnyArea(a.col, a.row));
     td.classList.toggle("fill-preview", fillActive && fillDrag.dest !== null && inRect(fillDrag.dest, a.col, a.row));
     td.classList.toggle("bold", fmt.bold === true);
+    td.classList.toggle("b-box", fmt.border === true);
+    td.classList.toggle("wrap", fmt.wrap === true);
     td.style.textAlign = fmt.align ?? "";
+    td.style.background = fmt.fill ?? "";
+    td.style.color = fmt.color ?? "";
   });
   // fill grip on the bottom-right cell of the selection
   gridEl.querySelectorAll(".fill-grip").forEach((el) => el.remove());
@@ -258,6 +263,81 @@ document.getElementById("btn-bold")?.addEventListener("mousedown", (e) => {
   eachSelected((addr) => sheet.setFormat(addr, { bold: turnOn ? true : null }));
   refreshValues();
   scheduleSave();
+});
+document.getElementById("btn-border")?.addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  const turnOn = !sheet.getFormat(selected).border;
+  eachSelected((addr) => sheet.setFormat(addr, { border: turnOn ? true : null }));
+  refreshValues();
+  scheduleSave();
+});
+document.getElementById("btn-wrap")?.addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  const turnOn = !sheet.getFormat(selected).wrap;
+  eachSelected((addr) => sheet.setFormat(addr, { wrap: turnOn ? true : null }));
+  refreshValues();
+  scheduleSave();
+});
+(document.getElementById("fill-color") as HTMLInputElement | null)?.addEventListener("change", (e) => {
+  const v = (e.target as HTMLInputElement).value;
+  eachSelected((addr) => sheet.setFormat(addr, { fill: v }));
+  refreshValues();
+  scheduleSave();
+});
+document.getElementById("btn-fill-clear")?.addEventListener("mousedown", (e) => {
+  e.preventDefault();
+  eachSelected((addr) => sheet.setFormat(addr, { fill: null }));
+  refreshValues();
+  scheduleSave();
+});
+(document.getElementById("cell-color") as HTMLInputElement | null)?.addEventListener("change", (e) => {
+  const v = (e.target as HTMLInputElement).value;
+  eachSelected((addr) => sheet.setFormat(addr, { color: v }));
+  refreshValues();
+  scheduleSave();
+});
+function bumpDecimals(delta: number): void {
+  eachSelected((addr) => {
+    const f = sheet.getFormat(addr);
+    const cur = f.decimals ?? 2;
+    const next = Math.max(0, Math.min(10, cur + delta));
+    sheet.setFormat(addr, { decimals: next, numFmt: f.numFmt ?? "number2" });
+  });
+  refreshValues();
+  scheduleSave();
+}
+document.getElementById("btn-dec-less")?.addEventListener("mousedown", (e) => { e.preventDefault(); bumpDecimals(-1); });
+document.getElementById("btn-dec-more")?.addEventListener("mousedown", (e) => { e.preventDefault(); bumpDecimals(1); });
+function structural(axis: "row" | "col", del: boolean): void {
+  const r = selRect();
+  const at = axis === "row" ? r.r0 : r.c0;
+  const span = axis === "row" ? r.r1 - r.r0 + 1 : r.c1 - r.c0 + 1;
+  shiftStructure(sheet, axis, at, del ? -span : span);
+  selAreas = [];
+  refreshValues();
+  scheduleSave();
+  statusEl.textContent = `${del ? "Deleted" : "Inserted"} ${span} ${axis}${span > 1 ? "s" : ""}`;
+}
+document.getElementById("btn-ins-row")?.addEventListener("click", () => structural("row", false));
+document.getElementById("btn-del-row")?.addEventListener("click", () => structural("row", true));
+document.getElementById("btn-ins-col")?.addEventListener("click", () => structural("col", false));
+document.getElementById("btn-del-col")?.addEventListener("click", () => structural("col", true));
+document.getElementById("btn-find")?.addEventListener("click", () => {
+  const q = window.prompt("Find:");
+  if (!q) return;
+  const needle = q.toLowerCase();
+  const start = parseAddr(selected)!;
+  const total = ROWS * COLS;
+  for (let i = 1; i <= total; i++) {
+    const flat = (start.row * COLS + start.col + i) % total;
+    const addr = formatAddr({ col: flat % COLS, row: Math.floor(flat / COLS) });
+    if (sheet.getDisplay(addr).toLowerCase().includes(needle) || sheet.getInput(addr).toLowerCase().includes(needle)) {
+      select(addr);
+      statusEl.textContent = `Found in ${addr}`;
+      return;
+    }
+  }
+  statusEl.textContent = `"${q}" not found`;
 });
 document.getElementById("fmt-num")?.addEventListener("change", (e) => {
   const v = (e.target as HTMLSelectElement).value;
@@ -587,6 +667,19 @@ function sendClipKey(key: string): void {
   );
 }
 
+function insertFn(names: string[]): void {
+  const pick = window.prompt(`Function:\n${names.join(", ")}`, names[0]);
+  if (!pick) return;
+  const fn = pick.trim().toUpperCase();
+  if (!names.includes(fn)) {
+    statusEl.textContent = `Unknown function ${fn}`;
+    return;
+  }
+  formulaEl.value = `=${fn}(`;
+  formulaEl.dispatchEvent(new Event("input", { bubbles: true }));
+  formulaEl.focus();
+}
+
 buildRibbon(
   document.getElementById("ribbon") as HTMLElement,
   [
@@ -610,16 +703,17 @@ buildRibbon(
             { kind: "move", id: "btn-bold" },
             { kind: "ph", label: "I" },
             { kind: "ph", label: "U" },
-            { kind: "ph", label: "Borders", icon: "⊞" },
-            { kind: "ph", label: "Fill Color", icon: "🪣" },
-            { kind: "ph", label: "Font Color", icon: "A" },
+            { kind: "move", id: "btn-border", label: "Borders", icon: "⊞" },
+            { kind: "move", id: "fill-color" },
+            { kind: "move", id: "btn-fill-clear" },
+            { kind: "move", id: "cell-color" },
           ],
         },
         {
           name: "Alignment",
           controls: [
             { kind: "move", id: "fmt-align" },
-            { kind: "ph", label: "Wrap Text" },
+            { kind: "move", id: "btn-wrap", label: "Wrap" },
             { kind: "ph", label: "Merge & Center" },
           ],
         },
@@ -627,17 +721,17 @@ buildRibbon(
           name: "Number",
           controls: [
             { kind: "move", id: "fmt-num" },
-            { kind: "ph", label: ",", icon: "" },
-            { kind: "ph", label: ".00→.0" },
-            { kind: "ph", label: ".0→.00" },
+            { kind: "move", id: "btn-dec-less" },
+            { kind: "move", id: "btn-dec-more" },
           ],
         },
         {
           name: "Cells",
           controls: [
-            { kind: "ph", label: "Insert", icon: "⊕" },
-            { kind: "ph", label: "Delete", icon: "⊖" },
-            { kind: "ph", label: "Format", icon: "▤" },
+            { kind: "move", id: "btn-ins-row", label: "Insert Row" },
+            { kind: "move", id: "btn-del-row", label: "Delete Row" },
+            { kind: "move", id: "btn-ins-col", label: "Insert Col" },
+            { kind: "move", id: "btn-del-col", label: "Delete Col" },
           ],
         },
         {
@@ -664,7 +758,7 @@ buildRibbon(
               statusEl.textContent = "Sorted Z→A";
             } },
             { kind: "ph", label: "Filter", icon: "⏷" },
-            { kind: "ph", label: "Find & Select", icon: "🔍" },
+            { kind: "move", id: "btn-find", label: "Find", icon: "🔍" },
           ],
         },
       ],
@@ -688,11 +782,10 @@ buildRibbon(
               formulaEl.dispatchEvent(new Event("input", { bubbles: true }));
               formulaEl.focus();
             } },
-            { kind: "ph", label: "Financial" },
-            { kind: "ph", label: "Logical" },
-            { kind: "ph", label: "Text" },
-            { kind: "ph", label: "Date & Time" },
-            { kind: "ph", label: "Lookup" },
+            { kind: "action", label: "Math Σ", title: "Insert SUM/AVERAGE/MIN/MAX/ROUND/ABS", onClick: () => insertFn(["SUM", "AVERAGE", "MIN", "MAX", "ROUND", "ABS"]) },
+            { kind: "action", label: "Logical ?", title: "Insert IF/AND/OR/NOT", onClick: () => insertFn(["IF", "AND", "OR", "NOT"]) },
+            { kind: "action", label: "Text Aa", title: "Insert CONCAT/LEN/UPPER/LOWER", onClick: () => insertFn(["CONCAT", "LEN", "UPPER", "LOWER"]) },
+            { kind: "action", label: "Count #", title: "Insert COUNT/COUNTA", onClick: () => insertFn(["COUNT", "COUNTA"]) },
           ],
         },
         { name: "Calculation", controls: [{ kind: "ph", label: "Calculate Now" }] },
