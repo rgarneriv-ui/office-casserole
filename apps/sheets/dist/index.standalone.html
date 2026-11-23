@@ -1463,6 +1463,27 @@
   var clip = null;
   var fillDrag = { src: { r0: 0, c0: 0, r1: 0, c1: 0 }, dest: null };
   var fillActive = false;
+  var selAreas = [];
+  function allAreas() {
+    return [...selAreas, selRect()];
+  }
+  function inAnyArea(col, row) {
+    return allAreas().some((a) => inRect(a, col, row));
+  }
+  function multiArea() {
+    return selAreas.length > 0;
+  }
+  function eachSelected(fn) {
+    const seen = /* @__PURE__ */ new Set();
+    for (const a of allAreas()) {
+      eachInRect(a, (addr) => {
+        if (!seen.has(addr)) {
+          seen.add(addr);
+          fn(addr);
+        }
+      });
+    }
+  }
   function selRect() {
     return normalizeRect(selAnchor, selected);
   }
@@ -1596,7 +1617,7 @@
       td.classList.toggle("error", isError(value));
       td.classList.toggle("num", typeof value === "number");
       td.classList.toggle("selected", addr === selected);
-      td.classList.toggle("in-range", rangeIsMulti() && inRect(selRect(), a.col, a.row));
+      td.classList.toggle("in-range", (rangeIsMulti() || multiArea()) && inAnyArea(a.col, a.row));
       td.classList.toggle("fill-preview", fillActive && fillDrag.dest !== null && inRect(fillDrag.dest, a.col, a.row));
       td.classList.toggle("bold", fmt.bold === true);
       td.style.textAlign = fmt.align ?? "";
@@ -1606,7 +1627,7 @@
     const corner = gridEl.querySelector(
       `td[data-addr="${formatAddr({ col: rr.c1, row: rr.r1 })}"]`
     );
-    if (corner && !editing) {
+    if (corner && !editing && !multiArea()) {
       const grip = document.createElement("span");
       grip.className = "fill-grip";
       corner.appendChild(grip);
@@ -1614,7 +1635,7 @@
     applyColWidths();
     applyRowHeights();
     const r = selRect();
-    addrEl.textContent = rangeIsMulti() ? `${formatAddr({ col: r.c0, row: r.r0 })}:${formatAddr({ col: r.c1, row: r.r1 })}` : selected;
+    addrEl.textContent = multiArea() ? `${allAreas().length} areas` : rangeIsMulti() ? `${formatAddr({ col: r.c0, row: r.r0 })}:${formatAddr({ col: r.c1, row: r.r1 })}` : selected;
     if (!editing) formulaEl.value = sheet.getInput(selected);
     syncFormatToolbar();
   }
@@ -1629,25 +1650,30 @@
   document.getElementById("btn-bold")?.addEventListener("mousedown", (e) => {
     e.preventDefault();
     const turnOn = !sheet.getFormat(selected).bold;
-    eachInRect(selRect(), (addr) => sheet.setFormat(addr, { bold: turnOn ? true : null }));
+    eachSelected((addr) => sheet.setFormat(addr, { bold: turnOn ? true : null }));
     refreshValues();
     scheduleSave();
   });
   document.getElementById("fmt-num")?.addEventListener("change", (e) => {
     const v = e.target.value;
-    eachInRect(selRect(), (addr) => sheet.setFormat(addr, { numFmt: v }));
+    eachSelected((addr) => sheet.setFormat(addr, { numFmt: v }));
     refreshValues();
     scheduleSave();
     formulaEl.focus();
   });
   document.getElementById("fmt-align")?.addEventListener("change", (e) => {
     const v = e.target.value;
-    eachInRect(selRect(), (addr) => sheet.setFormat(addr, { align: v === "auto" ? null : v }));
+    eachSelected((addr) => sheet.setFormat(addr, { align: v === "auto" ? null : v }));
     refreshValues();
     scheduleSave();
     formulaEl.focus();
   });
-  function select(addr, extend = false) {
+  function select(addr, extend = false, addArea = false) {
+    if (addArea) {
+      selAreas.push(selRect());
+    } else if (!extend) {
+      selAreas = [];
+    }
     selected = addr;
     if (!extend) selAnchor = addr;
     editing = false;
@@ -1672,7 +1698,7 @@
     }
     const td = e.target.closest("td[data-addr]");
     if (!td) return;
-    select(td.dataset.addr, e.shiftKey);
+    select(td.dataset.addr, e.shiftKey, (e.ctrlKey || e.metaKey) && !e.shiftKey);
     dragging = true;
     e.preventDefault();
   });
@@ -1739,14 +1765,18 @@
       if (e.key === "ArrowLeft" && a.col > 0) a.col--;
       e.preventDefault();
       select(formatAddr(a), e.shiftKey);
-    } else if ((e.key === "Delete" || e.key === "Backspace") && !editing && rangeIsMulti()) {
+    } else if ((e.key === "Delete" || e.key === "Backspace") && !editing && (rangeIsMulti() || multiArea())) {
       e.preventDefault();
-      clearRange(sheet, selRect());
+      for (const area of allAreas()) clearRange(sheet, area);
       refreshValues();
       scheduleSave();
     } else if ((e.ctrlKey || e.metaKey) && !editing && ["c", "x", "v"].includes(e.key.toLowerCase())) {
       const k = e.key.toLowerCase();
       e.preventDefault();
+      if ((k === "c" || k === "x") && multiArea()) {
+        statusEl.textContent = "Can't copy a multi-area selection";
+        return;
+      }
       if (k === "c" || k === "x") {
         clip = copyRange(sheet, selRect());
         try {

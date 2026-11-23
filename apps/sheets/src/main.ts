@@ -36,6 +36,34 @@ let fillDrag: { src: Rect; dest: Rect | null } = { src: { r0: 0, c0: 0, r1: 0, c
 let fillActive = false;
 void shiftFormula;
 
+/** Extra selection areas added with Ctrl/Cmd-click (Excel-style multi-area).
+ *  The live anchor..focus rect is always the last, implicit area. */
+let selAreas: Rect[] = [];
+
+function allAreas(): Rect[] {
+  return [...selAreas, selRect()];
+}
+
+function inAnyArea(col: number, row: number): boolean {
+  return allAreas().some((a) => inRect(a, col, row));
+}
+
+function multiArea(): boolean {
+  return selAreas.length > 0;
+}
+
+function eachSelected(fn: (addr: string) => void): void {
+  const seen = new Set<string>();
+  for (const a of allAreas()) {
+    eachInRect(a, (addr) => {
+      if (!seen.has(addr)) {
+        seen.add(addr);
+        fn(addr);
+      }
+    });
+  }
+}
+
 function selRect(): Rect {
   return normalizeRect(selAnchor, selected);
 }
@@ -186,7 +214,7 @@ function refreshValues(): void {
     td.classList.toggle("error", isError(value));
     td.classList.toggle("num", typeof value === "number");
     td.classList.toggle("selected", addr === selected);
-    td.classList.toggle("in-range", rangeIsMulti() && inRect(selRect(), a.col, a.row));
+    td.classList.toggle("in-range", (rangeIsMulti() || multiArea()) && inAnyArea(a.col, a.row));
     td.classList.toggle("fill-preview", fillActive && fillDrag.dest !== null && inRect(fillDrag.dest, a.col, a.row));
     td.classList.toggle("bold", fmt.bold === true);
     td.style.textAlign = fmt.align ?? "";
@@ -197,7 +225,7 @@ function refreshValues(): void {
   const corner = gridEl.querySelector(
     `td[data-addr="${formatAddr({ col: rr.c1, row: rr.r1 })}"]`
   ) as HTMLTableCellElement | null;
-  if (corner && !editing) {
+  if (corner && !editing && !multiArea()) {
     const grip = document.createElement("span");
     grip.className = "fill-grip";
     corner.appendChild(grip);
@@ -205,9 +233,11 @@ function refreshValues(): void {
   applyColWidths();
   applyRowHeights();
   const r = selRect();
-  addrEl.textContent = rangeIsMulti()
-    ? `${formatAddr({ col: r.c0, row: r.r0 })}:${formatAddr({ col: r.c1, row: r.r1 })}`
-    : selected;
+  addrEl.textContent = multiArea()
+    ? `${allAreas().length} areas`
+    : rangeIsMulti()
+      ? `${formatAddr({ col: r.c0, row: r.r0 })}:${formatAddr({ col: r.c1, row: r.r1 })}`
+      : selected;
   if (!editing) formulaEl.value = sheet.getInput(selected);
   syncFormatToolbar();
 }
@@ -224,26 +254,31 @@ function syncFormatToolbar(): void {
 document.getElementById("btn-bold")?.addEventListener("mousedown", (e) => {
   e.preventDefault();
   const turnOn = !sheet.getFormat(selected).bold;
-  eachInRect(selRect(), (addr) => sheet.setFormat(addr, { bold: turnOn ? true : null }));
+  eachSelected((addr) => sheet.setFormat(addr, { bold: turnOn ? true : null }));
   refreshValues();
   scheduleSave();
 });
 document.getElementById("fmt-num")?.addEventListener("change", (e) => {
   const v = (e.target as HTMLSelectElement).value;
-  eachInRect(selRect(), (addr) => sheet.setFormat(addr, { numFmt: v }));
+  eachSelected((addr) => sheet.setFormat(addr, { numFmt: v }));
   refreshValues();
   scheduleSave();
   formulaEl.focus();
 });
 document.getElementById("fmt-align")?.addEventListener("change", (e) => {
   const v = (e.target as HTMLSelectElement).value;
-  eachInRect(selRect(), (addr) => sheet.setFormat(addr, { align: v === "auto" ? null : v }));
+  eachSelected((addr) => sheet.setFormat(addr, { align: v === "auto" ? null : v }));
   refreshValues();
   scheduleSave();
   formulaEl.focus();
 });
 
-function select(addr: string, extend = false): void {
+function select(addr: string, extend = false, addArea = false): void {
+  if (addArea) {
+    selAreas.push(selRect());
+  } else if (!extend) {
+    selAreas = [];
+  }
   selected = addr;
   if (!extend) selAnchor = addr;
   editing = false;
@@ -271,7 +306,7 @@ gridEl.addEventListener("pointerdown", (e) => {
   }
   const td = (e.target as HTMLElement).closest("td[data-addr]") as HTMLTableCellElement | null;
   if (!td) return;
-  select(td.dataset.addr!, e.shiftKey);
+  select(td.dataset.addr!, e.shiftKey, (e.ctrlKey || e.metaKey) && !e.shiftKey);
   dragging = true;
   e.preventDefault();
 });
@@ -341,14 +376,19 @@ formulaEl.addEventListener("keydown", (e) => {
     if (e.key === "ArrowLeft" && a.col > 0) a.col--;
     e.preventDefault();
     select(formatAddr(a), e.shiftKey);
-  } else if ((e.key === "Delete" || e.key === "Backspace") && !editing && rangeIsMulti()) {
+  } else if ((e.key === "Delete" || e.key === "Backspace") && !editing && (rangeIsMulti() || multiArea())) {
     e.preventDefault();
-    clearRange(sheet, selRect());
+    for (const area of allAreas()) clearRange(sheet, area);
     refreshValues();
     scheduleSave();
   } else if ((e.ctrlKey || e.metaKey) && !editing && ["c", "x", "v"].includes(e.key.toLowerCase())) {
     const k = e.key.toLowerCase();
     e.preventDefault();
+    if ((k === "c" || k === "x") && multiArea()) {
+      // Excel refuses too: disjoint areas have no rectangular clip shape
+      statusEl.textContent = "Can't copy a multi-area selection";
+      return;
+    }
     if (k === "c" || k === "x") {
       clip = copyRange(sheet, selRect());
       try {

@@ -115,3 +115,35 @@ console.log("SMOKE OK — fill handle series");
   assert(Array.isArray(stored.rows) && stored.rows.some((r) => r.row === 1), "row height persisted");
 }
 console.log("SMOKE OK — row heights");
+
+// multi-area selection: ctrl-click adds areas; formats hit all; copy refused; delete clears all
+{
+  const td = (a) => doc.querySelector(`td[data-addr="${a}"]`);
+  const pdownc = (el, opts={}) => el.dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true, cancelable: true, ...opts }));
+  const pup = () => doc.dispatchEvent(new dom.window.MouseEvent("pointerup", { bubbles: true }));
+  const formula4 = doc.getElementById("formula");
+  for (const [addr, v] of [["H2","aa"],["H5","bb"]]) {
+    pdownc(td(addr)); pup();
+    formula4.value = v;
+    formula4.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+    formula4.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+  }
+  pdownc(td("H2")); pup();
+  pdownc(td("H5"), { ctrlKey: true }); pup();
+  assert(td("H2").classList.contains("in-range") && td("H5").classList.contains("in-range"),
+    "both areas highlighted");
+  assert(doc.getElementById("addr").textContent.includes("areas"), "address label shows area count");
+  // bold hits both areas (button acts on mousedown to keep grid focus)
+  doc.getElementById("btn-bold").dispatchEvent(new dom.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  assert(td("H2").classList.contains("bold") && td("H5").classList.contains("bold"), "format applied across areas");
+  // copy refused (keyboard shortcuts live on the formula bar, which holds focus)
+  formula4.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "c", ctrlKey: true, bubbles: true, cancelable: true }));
+  assert(doc.getElementById("status").textContent.includes("multi-area"), "multi-area copy refused with a message");
+  // delete clears both
+  formula4.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true }));
+  assert(td("H2").textContent === "" && td("H5").textContent === "", "delete cleared all areas");
+  // plain click resets to single area
+  pdownc(td("A1")); pup();
+  assert(!doc.getElementById("addr").textContent.includes("areas"), "plain click resets areas");
+}
+console.log("SMOKE OK — multi-area selection");

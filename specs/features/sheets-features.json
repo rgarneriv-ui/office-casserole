@@ -343,5 +343,37 @@
     "verification": "unit + independent openpyxl parse + jsdom smoke; not independently reviewed",
     "baseline": "Excel row heights (manual resize subset)",
     "offlineSupport": true
+  },
+  {
+    "id": "SHEETS-MULTIAREA-001",
+    "name": "Multi-area selection",
+    "application": "sheets",
+    "description": "Ctrl/Cmd-click adds disjoint selection areas (Excel-style). Formatting (bold, number format, align) and Delete apply across every area with per-cell dedup; copy/cut of a multi-area selection is refused with a status message (no rectangular clip shape); the fill grip hides; the address label shows the area count. A plain click resets to one area.",
+    "status": "tested",
+    "owner": "ai",
+    "priority": "P2",
+    "dependencies": [
+      "SHEETS-RANGE-001"
+    ],
+    "commands": [],
+    "acceptance": [
+      "ctrl-click highlights both areas",
+      "bold/number/align hit every area once",
+      "Delete clears all areas",
+      "multi-area copy refused with message",
+      "plain click resets"
+    ],
+    "edgeCases": [
+      "overlapping areas deduped per cell",
+      "the live anchor..focus rect is always the implicit last area"
+    ],
+    "knownLimitations": [
+      "no ctrl-drag to add a range area (click adds single cells / shift extends the live area)",
+      "no multi-area paste or fill"
+    ],
+    "evidence": "scripts/smoke-sheets.mjs multi-area scenario",
+    "verification": "jsdom smoke; not independently reviewed",
+    "baseline": "Excel multi-area selection (format/clear subset)",
+    "offlineSupport": true
   }
 ]
