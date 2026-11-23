@@ -194,3 +194,28 @@ test("pptx: a picture with missing media imports as a placeholder with a warning
   assert.ok(report.warnings.some((w) => w.code === "PPTX-IMPORT-PICTURE-MISSING"));
   assert.equal(deck.slides[0]!.elements[0]!.kind, "rect", "footprint kept as placeholder");
 });
+
+test("pptx: ellipse shapes and z-order round-trip", async () => {
+  const m = await import("../../presentation-model/src/model.js");
+  const deck = m.newDeck();
+  const back = m.rectElement({ x: 100, y: 100, w: 600, h: 400, fill: "#112233" });
+  const front = m.rectElement({ x: 200, y: 200, w: 300, h: 300, fill: "#445566" });
+  front.shape = "ellipse";
+  m.addElement(deck, 0, back);
+  m.addElement(deck, 0, front);
+  m.reorderElement(deck, 0, back.id, "front"); // back now draws on top
+  assert.equal(deck.slides[0]!.elements[deck.slides[0]!.elements.length - 1]!.id, back.id);
+
+  const { bytes } = await exportPptx(deck);
+  const entries = await zipRead(bytes);
+  const slide1 = new TextDecoder().decode(entries.find((e) => e.name === "ppt/slides/slide1.xml")!.data);
+  assert.ok(slide1.includes('prst="ellipse"'), "ellipse geometry emitted");
+  // order in the spTree mirrors z-order: ellipse (445566) before the fronted rect (112233)
+  assert.ok(slide1.indexOf("445566") < slide1.indexOf("112233"), "z-order preserved in XML");
+
+  const { deck: imported, report } = await importPptx(bytes, parseXml);
+  assert.equal(report.lossless, true, JSON.stringify(report.warnings));
+  const shapes = imported.slides[0]!.elements.filter((e) => e.kind === "rect");
+  assert.equal(shapes.find((e) => e.fill === "#445566")?.shape, "ellipse", "ellipse imported");
+  assert.equal(shapes.find((e) => e.fill === "#112233")?.shape, undefined, "plain rect has no shape variant");
+});

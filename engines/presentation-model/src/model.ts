@@ -27,6 +27,8 @@ export interface SlideElement {
   color?: string;
   /** rect elements */
   fill?: string;
+  /** rect elements: geometry variant (default "rect") */
+  shape?: "rect" | "ellipse";
   /** image elements: a data: URL (kept self-contained in the deck) */
   src?: string;
 }
@@ -125,6 +127,31 @@ export function moveSlide(deck: DeckModel, from: number, to: number): void {
 
 export function addElement(deck: DeckModel, slideIndex: number, element: SlideElement): void {
   deck.slides[slideIndex]?.elements.push(element);
+}
+
+export type ZOrderMove = "front" | "back" | "forward" | "backward";
+
+/** Reorder an element within its slide (later elements draw on top). */
+export function reorderElement(
+  deck: DeckModel,
+  slideIndex: number,
+  elementId: string,
+  move: ZOrderMove
+): void {
+  const slide = deck.slides[slideIndex];
+  if (!slide) return;
+  const i = slide.elements.findIndex((e) => e.id === elementId);
+  if (i < 0) return;
+  const [el] = slide.elements.splice(i, 1);
+  const target =
+    move === "front"
+      ? slide.elements.length
+      : move === "back"
+        ? 0
+        : move === "forward"
+          ? Math.min(slide.elements.length, i + 1)
+          : Math.max(0, i - 1);
+  slide.elements.splice(target, 0, el!);
 }
 
 export function removeElement(deck: DeckModel, slideIndex: number, elementId: string): void {

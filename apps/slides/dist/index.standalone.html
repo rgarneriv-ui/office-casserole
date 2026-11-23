@@ -45,6 +45,8 @@
            border: 1px solid var(--line); border-radius: 8px; padding: 6px 14px; font-size: 13px;
            min-height: 38px; flex-wrap: wrap; }
   #props label { display: flex; gap: 5px; align-items: center; }
+  .z-group { display: flex; gap: 4px; margin-left: auto; }
+  .z-group button { font-size: 12px; padding: 3px 7px; }
   #props input[type=number] { width: 60px; }
   #props .hint { color: var(--muted); }
   #present { position: fixed; inset: 0; background: #111; display: flex; align-items: center;
@@ -158,6 +160,15 @@
   }
   function addElement(deck2, slideIndex, element) {
     deck2.slides[slideIndex]?.elements.push(element);
+  }
+  function reorderElement(deck2, slideIndex, elementId, move) {
+    const slide = deck2.slides[slideIndex];
+    if (!slide) return;
+    const i = slide.elements.findIndex((e) => e.id === elementId);
+    if (i < 0) return;
+    const [el] = slide.elements.splice(i, 1);
+    const target = move === "front" ? slide.elements.length : move === "back" ? 0 : move === "forward" ? Math.min(slide.elements.length, i + 1) : Math.max(0, i - 1);
+    slide.elements.splice(target, 0, el);
   }
   function removeElement(deck2, slideIndex, elementId) {
     const slide = deck2.slides[slideIndex];
@@ -454,7 +465,9 @@
       return `<p:pic><p:nvPicPr><p:cNvPr id="${index + 2}" name="Picture ${index + 1}"/><p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed="${relId}"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr>${xfrm}${geom}</p:spPr></p:pic>`;
     }
     if (el.kind === "rect") {
-      return `<p:sp><p:nvSpPr><p:cNvPr id="${index + 2}" name="Box ${index + 1}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm}${geom}<a:solidFill><a:srgbClr val="${hex6(el.fill, "DBE7F0")}"/></a:solidFill></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="en-US"/></a:p></p:txBody></p:sp>`;
+      const prst = el.shape === "ellipse" ? "ellipse" : "rect";
+      const shapeGeom = `<a:prstGeom prst="${prst}"><a:avLst/></a:prstGeom>`;
+      return `<p:sp><p:nvSpPr><p:cNvPr id="${index + 2}" name="Box ${index + 1}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr><p:spPr>${xfrm}${shapeGeom}<a:solidFill><a:srgbClr val="${hex6(el.fill, "DBE7F0")}"/></a:solidFill></p:spPr><p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="en-US"/></a:p></p:txBody></p:sp>`;
     }
     const algn = el.align === "center" ? "ctr" : el.align === "right" ? "r" : "l";
     const sz = Math.max(100, Math.round((el.size ?? 36) * PT_PER_UNIT * 100));
@@ -618,7 +631,9 @@
     if (!hasText) {
       const fillClr = spPr ? deep(spPr, "srgbClr")[0] : null;
       const fill = fillClr ? `#${(fillClr.getAttribute("val") ?? "DBE7F0").toLowerCase()}` : void 0;
+      const prst = spPr ? deep(spPr, "prstGeom")[0]?.getAttribute("prst") : null;
       const el2 = { id: newElemId(), kind: "rect", x, y, w, h, fill };
+      if (prst === "ellipse") el2.shape = "ellipse";
       clampElement(el2);
       return el2;
     }
@@ -843,7 +858,8 @@
       return `<div class="el image${selected ? " sel" : ""}" data-id="${el.id}" style="${style}"><img src="${el.src ?? ""}" alt="" draggable="false"/>` + (selected ? `<div class="handle" data-handle="${el.id}"></div>` : "") + `</div>`;
     }
     if (el.kind === "rect") {
-      return `<div class="el rect${selected ? " sel" : ""}" data-id="${el.id}" style="${style}background:${el.fill ?? "#dbe7f0"}"></div>`;
+      const radius = el.shape === "ellipse" ? "border-radius:50%;" : "";
+      return `<div class="el rect${selected ? " sel" : ""}" data-id="${el.id}" style="${style}${radius}background:${el.fill ?? "#dbe7f0"}">` + (selected ? `<div class="handle" data-handle="${el.id}"></div>` : "") + `</div>`;
     }
     const textStyle = `font-size:${(el.size ?? 36) * scale}px;font-weight:${el.bold ? 700 : 400};text-align:${el.align ?? "left"};color:${el.color ?? "#222"};`;
     const text = (el.text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/\n/g, "<br>");
@@ -878,8 +894,13 @@
     }
     if (el.kind === "text") {
       propsEl.innerHTML = `<label>Size <input id="p-size" type="number" min="12" max="200" value="${el.size ?? 36}"></label><label><input id="p-bold" type="checkbox" ${el.bold ? "checked" : ""}> Bold</label><label>Align <select id="p-align">` + ["left", "center", "right"].map((a) => `<option ${a === (el.align ?? "left") ? "selected" : ""}>${a}</option>`).join("") + `</select></label><label>Color <input id="p-color" type="color" value="${el.color ?? "#222222"}"></label>`;
+    } else if (el.kind === "rect") {
+      propsEl.innerHTML = `<label>Fill <input id="p-fill" type="color" value="${el.fill ?? "#dbe7f0"}"></label><label>Shape <select id="p-shape"><option value="rect" ${el.shape !== "ellipse" ? "selected" : ""}>Rectangle</option><option value="ellipse" ${el.shape === "ellipse" ? "selected" : ""}>Ellipse</option></select></label>`;
     } else {
-      propsEl.innerHTML = `<label>Fill <input id="p-fill" type="color" value="${el.fill ?? "#dbe7f0"}"></label>`;
+      propsEl.innerHTML = `<span class="hint">Image \u2014 drag to move, handle to resize</span>`;
+    }
+    if (el) {
+      propsEl.innerHTML += `<span class="z-group"><button id="p-front" title="Bring to front">\u2B06\u2B06</button><button id="p-forward" title="Bring forward">\u2B06</button><button id="p-backward" title="Send backward">\u2B07</button><button id="p-back" title="Send to back">\u2B07\u2B07</button></span>`;
     }
     const patch = (p) => {
       history.checkpoint(deck, "props");
@@ -907,6 +928,19 @@
       "change",
       (e) => patch({ fill: e.target.value })
     );
+    document.getElementById("p-shape")?.addEventListener(
+      "change",
+      (e) => patch({ shape: e.target.value })
+    );
+    for (const [id, move] of [["p-front", "front"], ["p-forward", "forward"], ["p-backward", "backward"], ["p-back", "back"]]) {
+      document.getElementById(id)?.addEventListener("click", () => {
+        if (!selectedId) return;
+        history.checkpoint(deck);
+        reorderElement(deck, current, selectedId, move);
+        render();
+        scheduleSave();
+      });
+    }
   }
   var drag = null;
   canvasEl.addEventListener("pointerdown", (e) => {

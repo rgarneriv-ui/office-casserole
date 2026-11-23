@@ -107,9 +107,11 @@ function shapeXml(
     );
   }
   if (el.kind === "rect") {
+    const prst = el.shape === "ellipse" ? "ellipse" : "rect";
+    const shapeGeom = `<a:prstGeom prst="${prst}"><a:avLst/></a:prstGeom>`;
     return (
       `<p:sp><p:nvSpPr><p:cNvPr id="${index + 2}" name="Box ${index + 1}"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>` +
-      `<p:spPr>${xfrm}${geom}<a:solidFill><a:srgbClr val="${hex6(el.fill, "DBE7F0")}"/></a:solidFill></p:spPr>` +
+      `<p:spPr>${xfrm}${shapeGeom}<a:solidFill><a:srgbClr val="${hex6(el.fill, "DBE7F0")}"/></a:solidFill></p:spPr>` +
       `<p:txBody><a:bodyPr/><a:lstStyle/><a:p><a:endParaRPr lang="en-US"/></a:p></p:txBody>` +
       `</p:sp>`
     );
@@ -398,7 +400,9 @@ function importShape(
   if (!hasText) {
     const fillClr = spPr ? deep(spPr, "srgbClr")[0] : null;
     const fill = fillClr ? `#${(fillClr.getAttribute("val") ?? "DBE7F0").toLowerCase()}` : undefined;
+    const prst = spPr ? deep(spPr, "prstGeom")[0]?.getAttribute("prst") : null;
     const el: SlideElement = { id: newElemId(), kind: "rect", x, y, w, h, fill };
+    if (prst === "ellipse") el.shape = "ellipse";
     clampElement(el);
     return el;
   }

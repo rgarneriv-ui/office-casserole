@@ -20,6 +20,7 @@ import {
   newDeck,
   rectElement,
   removeElement,
+  reorderElement,
   removeSlide,
   textElement,
   updateElement,
@@ -88,7 +89,12 @@ function elementHtml(el: SlideElement, scale: number, selected: boolean): string
     );
   }
   if (el.kind === "rect") {
-    return `<div class="el rect${selected ? " sel" : ""}" data-id="${el.id}" style="${style}background:${el.fill ?? "#dbe7f0"}"></div>`;
+    const radius = el.shape === "ellipse" ? "border-radius:50%;" : "";
+    return (
+      `<div class="el rect${selected ? " sel" : ""}" data-id="${el.id}" style="${style}${radius}background:${el.fill ?? "#dbe7f0"}">` +
+      (selected ? `<div class="handle" data-handle="${el.id}"></div>` : "") +
+      `</div>`
+    );
   }
   const textStyle =
     `font-size:${(el.size ?? 36) * scale}px;font-weight:${el.bold ? 700 : 400};` +
@@ -150,8 +156,22 @@ function renderProps(): void {
       ["left", "center", "right"].map((a) => `<option ${a === (el.align ?? "left") ? "selected" : ""}>${a}</option>`).join("") +
       `</select></label>` +
       `<label>Color <input id="p-color" type="color" value="${el.color ?? "#222222"}"></label>`;
+  } else if (el.kind === "rect") {
+    propsEl.innerHTML =
+      `<label>Fill <input id="p-fill" type="color" value="${el.fill ?? "#dbe7f0"}"></label>` +
+      `<label>Shape <select id="p-shape">` +
+      `<option value="rect" ${el.shape !== "ellipse" ? "selected" : ""}>Rectangle</option>` +
+      `<option value="ellipse" ${el.shape === "ellipse" ? "selected" : ""}>Ellipse</option>` +
+      `</select></label>`;
   } else {
-    propsEl.innerHTML = `<label>Fill <input id="p-fill" type="color" value="${el.fill ?? "#dbe7f0"}"></label>`;
+    propsEl.innerHTML = `<span class="hint">Image — drag to move, handle to resize</span>`;
+  }
+  if (el) {
+    propsEl.innerHTML +=
+      `<span class="z-group"><button id="p-front" title="Bring to front">⬆⬆</button>` +
+      `<button id="p-forward" title="Bring forward">⬆</button>` +
+      `<button id="p-backward" title="Send backward">⬇</button>` +
+      `<button id="p-back" title="Send to back">⬇⬇</button></span>`;
   }
   const patch = (p: Partial<SlideElement>) => {
     history.checkpoint(deck, "props");
@@ -174,6 +194,18 @@ function renderProps(): void {
   (document.getElementById("p-fill") as HTMLInputElement | null)?.addEventListener("change", (e) =>
     patch({ fill: (e.target as HTMLInputElement).value })
   );
+  (document.getElementById("p-shape") as HTMLSelectElement | null)?.addEventListener("change", (e) =>
+    patch({ shape: (e.target as HTMLSelectElement).value as SlideElement["shape"] })
+  );
+  for (const [id, move] of [["p-front", "front"], ["p-forward", "forward"], ["p-backward", "backward"], ["p-back", "back"]] as const) {
+    document.getElementById(id)?.addEventListener("click", () => {
+      if (!selectedId) return;
+      history.checkpoint(deck);
+      reorderElement(deck, current, selectedId, move);
+      render();
+      scheduleSave();
+    });
+  }
 }
 
 // ---------- canvas interaction ----------
