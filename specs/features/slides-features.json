@@ -281,5 +281,84 @@
     "verification": "jsdom smoke; not independently reviewed",
     "baseline": "Microsoft Office ribbon (structure + implemented-command subset)",
     "offlineSupport": true
+  },
+  {
+    "id": "SLIDES-LAYOUTS-001",
+    "name": "Slide layouts",
+    "application": "slides",
+    "description": "Layout picker in the ribbon Slides group inserts a new slide from a preset: Title, Title + Content, Section Header, Two Content, Blank \u2014 all built from real editable elements (never flattened).",
+    "status": "tested",
+    "owner": "ai",
+    "priority": "P2",
+    "dependencies": [],
+    "commands": [],
+    "acceptance": [
+      "each layout inserts after the current slide with editable elements"
+    ],
+    "edgeCases": [
+      "picker resets to its placeholder after use"
+    ],
+    "knownLimitations": [
+      "fixed preset list; no custom layouts; no applying a layout to an existing slide"
+    ],
+    "evidence": "scripts/smoke-slides.mjs chunk-C scenario",
+    "verification": "jsdom smoke; not independently reviewed",
+    "baseline": "PowerPoint slide layouts (subset)",
+    "offlineSupport": true
+  },
+  {
+    "id": "SLIDES-RIBBON-TOOLS-001",
+    "name": "Ribbon font, arrange and quick styles",
+    "application": "slides",
+    "description": "Home > Font A+/A-/B act on the selected text box; Drawing group Front/Back reorder z; Quick Styles applies preset fills to a selected box. All undoable via the existing history.",
+    "status": "tested",
+    "owner": "ai",
+    "priority": "P2",
+    "dependencies": [],
+    "commands": [
+      "updateElement",
+      "reorderElement"
+    ],
+    "acceptance": [
+      "A+ grows size by 4 (props bar reflects)",
+      "quick style changes the fill",
+      "actions refuse politely with no selection"
+    ],
+    "edgeCases": [
+      "size clamped 12-200"
+    ],
+    "knownLimitations": [
+      "no font family/italic/underline for slide text; forward/backward only in the props bar"
+    ],
+    "evidence": "smoke chunk-C scenario",
+    "verification": "jsdom smoke; not independently reviewed",
+    "baseline": "PowerPoint Home tab (subset)",
+    "offlineSupport": true
+  },
+  {
+    "id": "SLIDES-FOOTER-001",
+    "name": "Footers and slide numbers; present from current",
+    "application": "slides",
+    "description": "Insert > Header & Footer sets deck-wide footer text and slide numbers, rendered on every slide, in thumbnails and when presenting. Slide Show offers From Beginning and From Current Slide.",
+    "status": "tested",
+    "owner": "ai",
+    "priority": "P2",
+    "dependencies": [],
+    "commands": [],
+    "acceptance": [
+      "footer text + number render on canvas and in present mode",
+      "From Current starts at the active slide"
+    ],
+    "edgeCases": [
+      "empty text + no numbers removes the footer"
+    ],
+    "knownLimitations": [
+      "footer not exported to PPTX (placeholder-based there; not yet wired)",
+      "prompt-based dialog"
+    ],
+    "evidence": "smoke chunk-C scenario",
+    "verification": "jsdom smoke; not independently reviewed",
+    "baseline": "PowerPoint Header & Footer (subset)",
+    "offlineSupport": true
   }
 ]

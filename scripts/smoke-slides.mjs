@@ -74,3 +74,43 @@ console.log("SMOKE OK — line element add/props");
   assert(ph && ph.disabled && ph.title.includes("not yet implemented"), "placeholders honest");
 }
 console.log("SMOKE OK — Slides ribbon");
+
+// chunk C: layouts, ribbon font, quick styles, footer, from-current
+{
+  const thumbsBefore = doc.querySelectorAll("#thumbs .thumb").length;
+  const layout = doc.getElementById("layout-pick");
+  layout.value = "section";
+  layout.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  assert(doc.querySelectorAll("#thumbs .thumb").length === thumbsBefore + 1, "layout picker adds a slide");
+  assert([...doc.querySelectorAll("#canvas .el.text .t")].some((t) => t.textContent.includes("Section")), "section layout content present");
+  // select the section title text and bump size via ribbon A+
+  const textEl = [...doc.querySelectorAll("#canvas .el.text")].find((e) => e.textContent.includes("Section"));
+  textEl.dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
+  doc.dispatchEvent(new dom.window.MouseEvent("pointerup", { bubbles: true }));
+  const aPlus = [...doc.querySelectorAll("#ribbon button")].find((b) => b.title === "Bigger text");
+  const sizeBefore = Number(doc.getElementById("p-size").value); // props bar mirrors the model
+  aPlus.click();
+  const sizeAfter = Number(doc.getElementById("p-size").value);
+  assert(sizeAfter === sizeBefore + 4, `A+ grew text (${sizeBefore} -> ${sizeAfter})`);
+  // quick style on the section rect
+  const rect = doc.querySelector("#canvas .el.rect");
+  rect.dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
+  doc.dispatchEvent(new dom.window.MouseEvent("pointerup", { bubbles: true }));
+  dom.window.prompt = () => "Warm";
+  const qs = [...doc.querySelectorAll("#ribbon button")].find((b) => b.textContent.includes("Quick Styles"));
+  qs.click();
+  assert(doc.querySelector("#canvas .el.rect").style.background.includes("243") || doc.querySelector("#canvas .el.rect").style.background.includes("#f3d9b1"), "quick style applied");
+  // footer
+  dom.window.prompt = () => "Casserole Deck";
+  dom.window.confirm = () => true;
+  doc.getElementById("btn-footer").click();
+  assert(doc.querySelector("#canvas .deck-footer"), "footer rendered on the canvas");
+  assert(doc.querySelector("#canvas .deck-footer").textContent.includes("Casserole Deck"), "footer text");
+  // from current slide
+  doc.getElementById("btn-present-current").click();
+  const counter = doc.querySelector("#present .counter").textContent;
+  assert(!doc.getElementById("present").hidden, "presenting");
+  assert(counter.startsWith(String([...doc.querySelectorAll('#thumbs .thumb')].findIndex(t => t.classList.contains('active')) + 1)), `from current: ${counter}`);
+  doc.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+}
+console.log("SMOKE OK — layouts, styles, footer, from-current");

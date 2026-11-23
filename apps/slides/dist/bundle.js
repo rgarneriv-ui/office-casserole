@@ -953,10 +953,19 @@
     const text = (el.text ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/\n/g, "<br>");
     return `<div class="el text${selected ? " sel" : ""}" data-id="${el.id}" style="${style}"><div class="t" style="${textStyle}">${text}</div>` + (selected ? `<div class="handle" data-handle="${el.id}"></div>` : "") + `</div>`;
   }
+  function footerHtml(index, scale) {
+    const f = deck.footer;
+    if (!f || !f.text && !f.showNumber) return "";
+    const fs = 24 * scale;
+    const pad = 20 * scale;
+    const text = f.text ? `<div style="position:absolute;left:${pad}px;bottom:${pad * 0.5}px;font-size:${fs}px;color:#888;">${f.text.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</div>` : "";
+    const num = f.showNumber ? `<div style="position:absolute;right:${pad}px;bottom:${pad * 0.5}px;font-size:${fs}px;color:#888;">${index + 1}</div>` : "";
+    return `<div class="deck-footer">${text}${num}</div>`;
+  }
   function slideHtml(index, scale, selectable) {
     const slide = deck.slides[index];
     if (!slide) return "";
-    return slide.elements.map((el) => elementHtml(el, scale, selectable && el.id === selectedId)).join("");
+    return slide.elements.map((el) => elementHtml(el, scale, selectable && el.id === selectedId)).join("") + footerHtml(index, scale);
   }
   function render() {
     const scale = canvasEl.clientWidth / CANVAS_W;
@@ -1298,7 +1307,7 @@
     const scale = Math.min(window.innerWidth / CANVAS_W, window.innerHeight / CANVAS_H) * 0.94;
     stage.style.width = `${CANVAS_W * scale}px`;
     stage.style.height = `${CANVAS_H * scale}px`;
-    stage.innerHTML = deck.slides[presentIndex].elements.map((el) => elementHtml(el, scale, false)).join("");
+    stage.innerHTML = slideHtml(presentIndex, scale, false);
     presentEl.querySelector(".counter").textContent = `${presentIndex + 1} / ${deck.slides.length}`;
   }
   function exitPresent() {
@@ -1306,7 +1315,21 @@
   }
   document.getElementById("btn-present")?.addEventListener("click", () => {
     presentEl.hidden = false;
+    showPresent(0);
+  });
+  document.getElementById("btn-present-current")?.addEventListener("click", () => {
+    presentEl.hidden = false;
     showPresent(current);
+  });
+  document.getElementById("btn-footer")?.addEventListener("click", () => {
+    const text = window.prompt("Footer text (empty for none):", deck.footer?.text ?? "");
+    if (text === null) return;
+    const num = window.confirm("Show slide numbers?");
+    history.checkpoint(deck, "footer");
+    if (!text && !num) delete deck.footer;
+    else deck.footer = { ...text ? { text } : {}, ...num ? { showNumber: true } : {} };
+    render();
+    scheduleSave();
   });
   presentEl.addEventListener("click", () => showPresent(presentIndex + 1));
   var hostDownloads = null;
@@ -1388,6 +1411,71 @@
   restore();
   render();
   window.addEventListener("resize", render);
+  var LAYOUTS = {
+    title: () => newSlide([
+      textElement({ x: 160, y: 300, w: 1280, h: 160, text: "Title", size: 88, bold: true, align: "center" }),
+      textElement({ x: 160, y: 500, w: 1280, h: 80, text: "Subtitle", size: 40, align: "center", color: "#666666" })
+    ]),
+    "title-content": () => newSlide([
+      textElement({ x: 120, y: 80, w: 1360, h: 110, text: "Slide title", size: 60, bold: true }),
+      textElement({ x: 120, y: 260, w: 1360, h: 540, text: "Body text", size: 36 })
+    ]),
+    section: () => newSlide([
+      rectElement({ x: 0, y: 360, w: 1600, h: 180, fill: "#2e4a62" }),
+      textElement({ x: 120, y: 410, w: 1360, h: 90, text: "Section", size: 64, bold: true, color: "#ffffff" })
+    ]),
+    "two-content": () => newSlide([
+      textElement({ x: 120, y: 80, w: 1360, h: 110, text: "Slide title", size: 60, bold: true }),
+      textElement({ x: 120, y: 260, w: 650, h: 540, text: "Left content", size: 32 }),
+      textElement({ x: 830, y: 260, w: 650, h: 540, text: "Right content", size: 32 })
+    ]),
+    blank: () => newSlide([])
+  };
+  document.getElementById("layout-pick")?.addEventListener("change", (e) => {
+    const sel = e.target;
+    const make = LAYOUTS[sel.value];
+    sel.value = "";
+    if (!make) return;
+    cmd(() => {
+      const slide = make();
+      deck.slides.splice(current + 1, 0, slide);
+      current = current + 1;
+      selectedId = null;
+    });
+  });
+  var QUICK_STYLES = [
+    { name: "Accent", fill: "#2e4a62" },
+    { name: "Soft", fill: "#dbe7f0" },
+    { name: "Warm", fill: "#f3d9b1" },
+    { name: "Alert", fill: "#c0504d" }
+  ];
+  function applyQuickStyle() {
+    const el = selectedElement();
+    if (!el || el.kind !== "rect") {
+      statusEl.textContent = "Select a box first";
+      return;
+    }
+    const pick = window.prompt(`Style:
+${QUICK_STYLES.map((q) => q.name).join(", ")}`, QUICK_STYLES[0].name);
+    const style = QUICK_STYLES.find((q) => q.name.toLowerCase() === (pick ?? "").trim().toLowerCase());
+    if (!style) return;
+    cmd(() => updateElement(deck, current, el.id, { fill: style.fill }));
+  }
+  function ribbonFontPatch(patch) {
+    const el = selectedElement();
+    if (!el || el.kind !== "text") {
+      statusEl.textContent = "Select a text box first";
+      return;
+    }
+    cmd(() => updateElement(deck, current, el.id, patch));
+  }
+  function ribbonArrange(move) {
+    if (!selectedId) {
+      statusEl.textContent = "Select an element first";
+      return;
+    }
+    cmd(() => reorderElement(deck, current, selectedId, move));
+  }
   buildRibbon(
     document.getElementById("ribbon"),
     [
@@ -1403,14 +1491,24 @@
             name: "Slides",
             controls: [
               { kind: "move", id: "btn-add-slide", label: "New\nSlide", icon: "\u{1F5C2}", big: true },
+              { kind: "move", id: "layout-pick" },
               { kind: "move", id: "btn-dup-slide", label: "Duplicate" },
-              { kind: "move", id: "btn-del-slide", label: "Delete Slide" },
-              { kind: "ph", label: "Layout", icon: "\u25A4" }
+              { kind: "move", id: "btn-del-slide", label: "Delete Slide" }
             ]
           },
           { name: "Font", controls: [
-            { kind: "ph", label: "Calibri" },
-            { kind: "ph", label: "B" },
+            { kind: "action", label: "A+", title: "Bigger text", onClick: () => {
+              const el = selectedElement();
+              ribbonFontPatch({ size: Math.min(200, (el?.size ?? 36) + 4) });
+            } },
+            { kind: "action", label: "A\u2212", title: "Smaller text", onClick: () => {
+              const el = selectedElement();
+              ribbonFontPatch({ size: Math.max(12, (el?.size ?? 36) - 4) });
+            } },
+            { kind: "action", label: "B", title: "Bold the selected text box", onClick: () => {
+              const el = selectedElement();
+              ribbonFontPatch({ bold: !(el?.bold ?? false) });
+            } },
             { kind: "ph", label: "I" },
             { kind: "ph", label: "U" }
           ] },
@@ -1420,8 +1518,9 @@
               { kind: "move", id: "btn-add-text", label: "Text\nBox", icon: "\u{1F170}", big: true },
               { kind: "move", id: "btn-add-rect", label: "Shapes", icon: "\u2B20", big: true },
               { kind: "move", id: "btn-add-line", label: "Line", icon: "\u2571", big: true },
-              { kind: "ph", label: "Arrange", icon: "\u29C9" },
-              { kind: "ph", label: "Quick Styles" }
+              { kind: "action", label: "Front", title: "Bring to front", onClick: () => ribbonArrange("front") },
+              { kind: "action", label: "Back", title: "Send to back", onClick: () => ribbonArrange("back") },
+              { kind: "action", label: "Quick Styles", icon: "\u{1F3A8}", title: "Apply a preset style to the selected box", onClick: applyQuickStyle }
             ]
           },
           { name: "Editing", controls: [
@@ -1441,7 +1540,7 @@
             { kind: "ph", label: "Chart", icon: "\u{1F4CA}" }
           ] },
           { name: "Media", controls: [{ kind: "ph", label: "Video", icon: "\u{1F39E}" }, { kind: "ph", label: "Audio", icon: "\u{1F50A}" }] },
-          { name: "Text", controls: [{ kind: "ph", label: "Header &\nFooter", big: true, icon: "\u25AD" }, { kind: "ph", label: "WordArt" }] }
+          { name: "Text", controls: [{ kind: "move", id: "btn-footer", label: "Header &\nFooter", big: true, icon: "\u25AD" }, { kind: "ph", label: "WordArt" }] }
         ]
       },
       {
@@ -1451,7 +1550,7 @@
             name: "Start Slide Show",
             controls: [
               { kind: "move", id: "btn-present", label: "From\nBeginning", icon: "\u25B6", big: true },
-              { kind: "ph", label: "From Current\nSlide", big: true, icon: "\u25B7" },
+              { kind: "move", id: "btn-present-current", label: "From Current\nSlide", icon: "\u25B7", big: true },
               { kind: "ph", label: "Rehearse Timings" }
             ]
           }

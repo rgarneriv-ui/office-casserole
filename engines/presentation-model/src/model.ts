@@ -48,6 +48,8 @@ export interface Slide {
 export interface DeckModel {
   schemaVersion: string;
   slides: Slide[];
+  /** deck-wide footer text and slide-number toggle (rendered bottom of every slide) */
+  footer?: { text?: string; showNumber?: boolean };
 }
 
 let counter = 0;
