@@ -805,5 +805,43 @@
     "verification": "unit + independent python-docx parse; not independently reviewed",
     "baseline": "Word keeps all constructs natively",
     "offlineSupport": true
+  },
+  {
+    "id": "WRITE-FIND-001",
+    "name": "Find & replace",
+    "application": "write",
+    "description": "Find bar (Ctrl/Cmd-F or palette): live match count, Next cycles matches with selection, Replace and Replace-all emit journaled replace-runs primitives (replacement carries the marks of the first replaced character). Replace-all is one transaction \u2014 a single undo restores.",
+    "status": "tested",
+    "owner": "ai",
+    "priority": "P1",
+    "dependencies": [],
+    "commands": [
+      "findMatches",
+      "replaceMatch",
+      "replaceAll",
+      "findReplaceOne",
+      "findReplaceAll"
+    ],
+    "acceptance": [
+      "case-insensitive by default, Aa toggle narrows",
+      "per-block matches; repeated matches found",
+      "replace keeps bold at match start",
+      "replace-all + single undo round-trips byte-stable",
+      "count label live-updates"
+    ],
+    "edgeCases": [
+      "empty query matches nothing",
+      "back-to-front replacement keeps offsets valid",
+      "marksAt probed one past match start (caret-style lookup)"
+    ],
+    "knownLimitations": [
+      "plain text only (no regex, no whole-word)",
+      "table cell content not searched (tables are atomic blocks)",
+      "no cross-block matches"
+    ],
+    "evidence": "engines/document-model/test/operations.test.ts find/replace suites; scripts/smoke-write.mjs scenario 7",
+    "verification": "unit + jsdom smoke; not independently reviewed",
+    "baseline": "Word find & replace (plain-text subset)",
+    "offlineSupport": true
   }
 ]

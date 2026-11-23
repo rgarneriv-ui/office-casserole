@@ -172,3 +172,34 @@ console.log("SMOKE OK — live journal + authorship");
   assert(doc.querySelectorAll("#editor [data-block]").length === blocksBefore, "block count restored");
 }
 console.log("SMOKE OK — tables insert/edit/undo");
+
+// Scenario 7: find & replace — Ctrl-F bar, count, replace-all journaled + undoable
+{
+  const dom = await bootDom();
+  const doc = dom.window.document;
+  const editorEl = doc.getElementById("editor");
+  const findbar = doc.getElementById("findbar");
+  assert(findbar.hidden, "find bar starts hidden");
+  editorEl.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true, cancelable: true }));
+  assert(!findbar.hidden, "Ctrl-F opens the find bar");
+  const q = doc.getElementById("find-q");
+  const r = doc.getElementById("find-r");
+  const seedWord = editorEl.textContent.trim().split(/\s+/).find((w) => w.length >= 4);
+  assert(seedWord, "document has a word to search");
+  q.value = seedWord;
+  q.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
+  const count = doc.getElementById("find-count").textContent;
+  assert(/\d+/.test(count), `count label shows matches (${count})`);
+  const before = editorEl.textContent;
+  r.value = "ZZREPL";
+  doc.getElementById("find-repl-all").click();
+  await new Promise((res) => setTimeout(res, 50));
+  assert(editorEl.textContent.includes("ZZREPL"), "replace-all applied");
+  assert(!editorEl.textContent.includes(seedWord), "all occurrences replaced");
+  editorEl.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true, cancelable: true }));
+  await new Promise((res) => setTimeout(res, 50));
+  assert(editorEl.textContent === before, "undo restores the pre-replace text in one step");
+  doc.getElementById("find-close").click();
+  assert(findbar.hidden, "close hides the bar");
+}
+console.log("SMOKE OK — find & replace");

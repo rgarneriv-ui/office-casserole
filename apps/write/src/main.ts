@@ -23,6 +23,9 @@ import {
   blockText,
   clampPosition,
   deleteRange,
+  findMatches,
+  replaceAll,
+  replaceMatch,
   fromJSON,
   insertText,
   inspect,
@@ -43,6 +46,7 @@ import {
   toMarkdown,
   validateModel,
 } from "../../../engines/document-model/src/index";
+import type { TextMatch } from "../../../engines/document-model/src/index";
 
 import { DocumentStore, StoredRevision, newDocId, openBestStore } from "./store";
 import { diffBlockText, diffModels, diffSummary } from "../../../engines/document-model/src/diff";
@@ -420,6 +424,8 @@ function updateExplain(): void {
 
 // ---------- command dispatch (§18.2) ----------
 type CommandId =
+  | "findReplaceOne"
+  | "findReplaceAll"
   | "indentList"
   | "outdentList"
   | "insertTable"
@@ -542,6 +548,26 @@ function dispatch(id: CommandId, payload?: unknown): void {
       setBlockType(model, selection, payload as Block["type"], log);
       break;
     }
+    case "findReplaceOne": {
+      const { match, replacement } = payload as { match: TextMatch; replacement: string };
+      const caret = replaceMatch(model, match, replacement, log);
+      selection = { anchor: { block: match.block, offset: match.from }, focus: caret };
+      break;
+    }
+    case "findReplaceAll": {
+      const { query, replacement, matchCase } = payload as {
+        query: string;
+        replacement: string;
+        matchCase: boolean;
+      };
+      const n = replaceAll(model, query, replacement, matchCase, log);
+      selection = {
+        anchor: clampPosition(model, selection.anchor),
+        focus: clampPosition(model, selection.focus),
+      };
+      statusEl.textContent = n > 0 ? `Replaced ${n} occurrence${n === 1 ? "" : "s"}` : "No matches";
+      break;
+    }
   }
   if (id !== "toggleMark") caretMarks = null;
   render();
@@ -620,6 +646,7 @@ editor.addEventListener("keydown", (e: KeyboardEvent) => {
   else if (k === "b") { e.preventDefault(); readSelection(); dispatch("toggleMark", "bold"); }
   else if (k === "i") { e.preventDefault(); readSelection(); dispatch("toggleMark", "italic"); }
   else if (k === "u") { e.preventDefault(); readSelection(); dispatch("toggleMark", "underline"); }
+  else if (k === "f") { e.preventDefault(); openFindBar(); }
 });
 
 document.addEventListener("selectionchange", () => {
@@ -1223,6 +1250,17 @@ function blockCmd(type: Block["type"], name: string): CommandDefinition {
 }
 
 const COMMANDS: CommandDefinition[] = [
+  {
+    id: "edit.find",
+    name: "Find & replace",
+    description: "Search the document and replace matches",
+    isPermitted: () => true,
+    isAvailable: () => true,
+    undoable: false,
+    shortcut: "Ctrl/Cmd-F",
+    auditClassification: "read",
+    run: () => openFindBar(),
+  },
   markCmd("bold", "Bold", "Ctrl/Cmd-B"),
   markCmd("italic", "Italic", "Ctrl/Cmd-I"),
   markCmd("underline", "Underline", "Ctrl/Cmd-U"),
@@ -1415,3 +1453,93 @@ async function boot(): Promise<void> {
 
 void boot();
 editor.focus();
+
+// ---------- find & replace bar (WO-37) ----------
+const findbarEl = document.getElementById("findbar") as HTMLElement;
+const findQ = document.getElementById("find-q") as HTMLInputElement;
+const findR = document.getElementById("find-r") as HTMLInputElement;
+const findCase = document.getElementById("find-case") as HTMLInputElement;
+const findCountEl = document.getElementById("find-count") as HTMLElement;
+let findIdx = -1;
+
+function currentMatches(): TextMatch[] {
+  return findMatches(model, findQ.value, findCase.checked);
+}
+
+function updateFindCount(ms: TextMatch[]): void {
+  findCountEl.textContent =
+    findQ.value.length === 0 ? "" : ms.length === 0 ? "No matches" : `${findIdx + 1 > 0 ? findIdx + 1 : "–"} / ${ms.length}`;
+}
+
+function openFindBar(): void {
+  findbarEl.hidden = false;
+  findIdx = -1;
+  findQ.focus();
+  findQ.select();
+  updateFindCount(currentMatches());
+}
+
+function closeFindBar(): void {
+  findbarEl.hidden = true;
+  editor.focus();
+}
+
+function selectMatch(m: TextMatch): void {
+  selection = { anchor: { block: m.block, offset: m.from }, focus: { block: m.block, offset: m.to } };
+  render();
+  const node = window.getSelection()?.focusNode;
+  (node instanceof Element ? node : node?.parentElement)?.scrollIntoView({ block: "nearest" });
+}
+
+function findNext(): void {
+  const ms = currentMatches();
+  if (ms.length === 0) {
+    findIdx = -1;
+    updateFindCount(ms);
+    return;
+  }
+  findIdx = (findIdx + 1) % ms.length;
+  selectMatch(ms[findIdx]!);
+  updateFindCount(ms);
+}
+
+function replaceCurrent(): void {
+  const ms = currentMatches();
+  if (ms.length === 0) {
+    updateFindCount(ms);
+    return;
+  }
+  const idx = findIdx >= 0 && findIdx < ms.length ? findIdx : 0;
+  dispatch("findReplaceOne", { match: ms[idx]!, replacement: findR.value });
+  findIdx = idx - 1; // next findNext lands on the match after the replacement
+  findNext();
+}
+
+function replaceAllFromBar(): void {
+  if (findQ.value.length === 0) return;
+  dispatch("findReplaceAll", { query: findQ.value, replacement: findR.value, matchCase: findCase.checked });
+  findIdx = -1;
+  updateFindCount(currentMatches());
+}
+
+findQ.addEventListener("input", () => {
+  findIdx = -1;
+  updateFindCount(currentMatches());
+});
+findCase.addEventListener("change", () => {
+  findIdx = -1;
+  updateFindCount(currentMatches());
+});
+findQ.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); findNext(); }
+});
+findR.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); replaceCurrent(); }
+});
+findbarEl.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { e.preventDefault(); closeFindBar(); }
+});
+document.getElementById("find-next")?.addEventListener("click", findNext);
+document.getElementById("find-repl")?.addEventListener("click", replaceCurrent);
+document.getElementById("find-repl-all")?.addEventListener("click", replaceAllFromBar);
+document.getElementById("find-close")?.addEventListener("click", closeFindBar);

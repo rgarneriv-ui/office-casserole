@@ -139,3 +139,55 @@ test("undo/redo restore exact states; typing coalesces into one step", () => {
   assert.equal(docText(d), docText(afterBold));
   assert.equal(h.canRedo(), false);
 });
+
+// ---------- find & replace (WO-37) ----------
+import { findMatches, replaceAll } from "../src/operations";
+import { blockText } from "../src/model";
+import { TransactionLog } from "../src/oplog";
+import type { TextRun } from "../src/types";
+
+function fr(): DocModel {
+  const b = newBlock("paragraph");
+  return doc(b);
+}
+
+test("find: case-insensitive by default, per-block, repeated matches, tables skipped", () => {
+  const model = fr();
+  model.blocks[0]!.runs = [{ text: "The cat sat. The CAT ran.", marks: [] }];
+  model.blocks.push(newBlock("paragraph"));
+  model.blocks[1]!.runs = [{ text: "no felines here", marks: [] }];
+  const tbl = newBlock("table");
+  tbl.table = [["cat in a table"]];
+  tbl.runs = [];
+  model.blocks.push(tbl);
+  const ms = findMatches(model, "cat");
+  assert.deepEqual(ms, [
+    { block: 0, from: 4, to: 7 },
+    { block: 0, from: 17, to: 20 },
+  ]);
+  assert.equal(findMatches(model, "CAT", true).length, 1, "match-case narrows");
+  assert.equal(findMatches(model, "").length, 0, "empty query matches nothing");
+});
+
+test("replace: marks carried from match start; replaceAll back-to-front; undo restores", () => {
+  const model = fr();
+  model.blocks[0]!.runs = [
+    { text: "alpha ", marks: [] },
+    { text: "beta", marks: ["bold"] },
+    { text: " beta end", marks: [] },
+  ];
+  const log = new TransactionLog();
+  log.begin("replace");
+  const n = replaceAll(model, "beta", "gamma", false, log);
+  log.flush();
+  assert.equal(n, 2);
+  assert.equal(blockText(model.blocks[0]!), "alpha gamma gamma end");
+  // first replacement sat in the bold run
+  const boldRun = model.blocks[0]!.runs.find((r: TextRun) => r.marks.includes("bold"));
+  assert.ok(boldRun && boldRun.text.includes("gamma"), "replacement keeps bold at match start");
+  const before = JSON.stringify(model.blocks[0]!.runs);
+  log.undo(model);
+  assert.equal(blockText(model.blocks[0]!), "alpha beta beta end", "undo restores");
+  log.redo(model);
+  assert.equal(JSON.stringify(model.blocks[0]!.runs), before, "redo byte-stable");
+});

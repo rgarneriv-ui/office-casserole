@@ -20,6 +20,7 @@ import {
   newId,
   normRange,
   runsSlice,
+  marksAt,
   sortMarks,
 } from "./model";
 import { OpRecorder, PrimOp, applyOp } from "./oplog";
@@ -417,4 +418,75 @@ export function removeTable(model: DocModel, blockIndex: number, rec?: OpRecorde
   const before = cloneStyle(block.tableStyle);
   if (before !== null) op.beforeStyle = before;
   emit(model, op, rec);
+}
+
+// ---------- find & replace (WO-37) ----------
+
+export interface TextMatch {
+  block: number;
+  from: number;
+  to: number;
+}
+
+/**
+ * Plain-text search over paragraph-family blocks (tables are atomic and not
+ * searched — see registry known limitations). Matches never cross blocks.
+ */
+export function findMatches(model: DocModel, query: string, matchCase = false): TextMatch[] {
+  if (query.length === 0) return [];
+  const needle = matchCase ? query : query.toLowerCase();
+  const out: TextMatch[] = [];
+  model.blocks.forEach((block, bi) => {
+    if (block.type === "table") return;
+    const hay = matchCase ? blockText(block) : blockText(block).toLowerCase();
+    let at = hay.indexOf(needle);
+    while (at >= 0) {
+      out.push({ block: bi, from: at, to: at + query.length });
+      at = hay.indexOf(needle, at + Math.max(1, query.length));
+    }
+  });
+  return out;
+}
+
+/** Replace one match with plain text carrying the marks at the match start.
+ *  A single invertible replace-runs primitive — journaled like any edit. */
+export function replaceMatch(
+  model: DocModel,
+  m: TextMatch,
+  replacement: string,
+  rec?: OpRecorder
+): Position {
+  const block = model.blocks[m.block];
+  if (!block) throw new Error(`replaceMatch: no block ${m.block}`);
+  // marks of the first replaced character (marksAt is caret-style: it looks
+  // left of the offset, so probe one past the match start)
+  const marks = marksAt(block, Math.min(m.from + 1, m.to));
+  emit(
+    model,
+    {
+      t: "replace-runs",
+      block: m.block,
+      from: m.from,
+      to: m.to,
+      before: runsSlice(block.runs, m.from, m.to),
+      after: replacement.length > 0 ? [{ text: replacement, marks }] : [],
+    },
+    rec
+  );
+  return { block: m.block, offset: m.from + replacement.length };
+}
+
+/** Replace every match (back-to-front so offsets stay valid). Returns count. */
+export function replaceAll(
+  model: DocModel,
+  query: string,
+  replacement: string,
+  matchCase = false,
+  rec?: OpRecorder
+): number {
+  const matches = findMatches(model, query, matchCase);
+  for (let i = matches.length - 1; i >= 0; i--) {
+    replaceMatch(model, matches[i]!, replacement, rec);
+  }
+  return matches.length;
 }

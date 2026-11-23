@@ -109,6 +109,12 @@
   .d-chg { background: #f7f3e7; padding: 2px 6px; border-radius: 4px; margin: 2px 0; }
   .d-old { color: #a33b2c; text-decoration: line-through; }
   .d-new { color: #2e6e3c; }
+  #findbar { display: flex; gap: 6px; align-items: center; padding: 6px 10px;
+             border-bottom: 1px solid #ddd; background: #f8f6f1; }
+  #findbar[hidden] { display: none; }
+  #findbar input[type=text] { flex: 1; min-width: 80px; padding: 4px 8px; font: inherit; }
+  #findbar .fb-count { color: #777; font-size: 12px; min-width: 64px; text-align: center; }
+  #findbar .fb-case { font-size: 12px; color: #555; display: flex; align-items: center; gap: 2px; }
 </style>
 </head>
 <body>
@@ -146,6 +152,16 @@
   </header>
   <main>
     <div class="page-wrap">
+      <div id="findbar" hidden>
+        <input id="find-q" type="text" placeholder="Find…">
+        <input id="find-r" type="text" placeholder="Replace with…">
+        <label class="fb-case"><input id="find-case" type="checkbox"> Aa</label>
+        <span id="find-count" class="fb-count"></span>
+        <button id="find-next">Next</button>
+        <button id="find-repl">Replace</button>
+        <button id="find-repl-all">All</button>
+        <button id="find-close" title="Close (Esc)">✕</button>
+      </div>
       <div id="editor" contenteditable="true" spellcheck="true"></div>
     </div>
     <aside>
