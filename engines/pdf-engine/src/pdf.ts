@@ -232,18 +232,25 @@ export function exportPdf(
     if (block.type === "table" && block.table) {
       const pad = 4;
       const cols = block.table[0]!.length;
-      const colW = maxWidth / cols;
-      const cellMeasure = colW - 2 * pad;
+      const tStyle = block.tableStyle ?? {};
+      const weights = tStyle.widths ?? new Array<number>(cols).fill(1);
+      const weightSum = weights.reduce((a, b) => a + b, 0);
+      const colWs = weights.map((w) => (maxWidth * w) / weightSum);
+      const colX = [MARGIN];
+      for (const w of colWs) colX.push(colX[colX.length - 1]! + w);
       const lineH = BODY_SIZE * LINE_FACTOR;
       y -= 4; // breathing room above the grid
 
-      for (const row of block.table) {
+      block.table.forEach((row, rIdx) => {
+        const isHeader = tStyle.headerRow === true && rIdx === 0;
+        const cellFont: FontKey = isHeader ? "B" : "R";
         // wrap every cell (preserving explicit newlines)
-        const cellLines: Line[][] = row.map((cell) => {
+        const cellLines: Line[][] = row.map((cell, cIdx) => {
           const out: Line[] = [];
+          const cellMeasure = colWs[cIdx]! - 2 * pad;
           for (const segment of sanitize(cell, warnings, bi).split("\n")) {
             out.push(
-              ...wrapBlock([{ text: segment, font: "R", underline: false }], BODY_SIZE, cellMeasure, family)
+              ...wrapBlock([{ text: segment, font: cellFont, underline: false }], BODY_SIZE, cellMeasure, family)
             );
           }
           return out;
@@ -262,21 +269,30 @@ export function exportPdf(
         // row borders: top + verticals (bottom comes from the next row's top, or the closer)
         page.push({ kind: "rule", x1: MARGIN, y1: top, x2: MARGIN + maxWidth, y2: top });
         for (let c = 0; c <= cols; c++) {
-          const x = MARGIN + c * colW;
-          page.push({ kind: "rule", x1: x, y1: top, x2: x, y2: bottom });
+          page.push({ kind: "rule", x1: colX[c]!, y1: top, x2: colX[c]!, y2: bottom });
         }
         cellLines.forEach((linesInCell, c) => {
+          const align = tStyle.aligns?.[c] ?? null;
           linesInCell.forEach((line, li) => {
+            let x = colX[c]! + pad;
+            if (align === "center" || align === "right") {
+              const lw = line.spans.reduce(
+                (n, sp) => n + measureText(sp.text, sp.font, line.size, family),
+                0
+              );
+              const free = colWs[c]! - 2 * pad - lw;
+              x += align === "center" ? free / 2 : free;
+            }
             page.push({
               kind: "text",
               line,
-              x: MARGIN + c * colW + pad,
+              x,
               y: top - pad - BODY_SIZE - li * lineH,
             });
           });
         });
         y = bottom;
-      }
+      });
       page.push({ kind: "rule", x1: MARGIN, y1: y, x2: MARGIN + maxWidth, y2: y });
       y -= BODY_SIZE;
       return;

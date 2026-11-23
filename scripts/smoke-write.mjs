@@ -149,19 +149,19 @@ console.log("SMOKE OK — live journal + authorship");
   await new Promise(r => setTimeout(r, 100));
   const table = doc.querySelector("#editor .cas-table");
   assert(table, "table rendered");
-  assert(table.querySelectorAll("td").length === 9, "3x3 cells");
+  assert(table.querySelectorAll("td, th").length === 9, "3x3 cells");
 
   // click a cell twice (first activates, then opens the input), type, commit
-  let td = table.querySelector('td[data-r="0"][data-c="0"]');
+  let td = table.querySelector('[data-r="0"][data-c="0"]');
   td.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
-  td = doc.querySelector('#editor td[data-r="0"][data-c="0"]');
+  td = doc.querySelector('#editor [data-r="0"][data-c="0"]');
   td.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
   const cell = doc.querySelector("#editor .cell-input");
   assert(cell, "cell editor opened");
   cell.value = "Fee";
   cell.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
   await new Promise(r => setTimeout(r, 50));
-  assert(doc.querySelector('#editor td[data-r="0"][data-c="0"]').textContent === "Fee", "cell committed");
+  assert(doc.querySelector('#editor [data-r="0"][data-c="0"]').textContent === "Fee", "cell committed");
   assert(doc.querySelector("#editor .tbl-controls"), "table controls visible when active");
 
   // undo cell edit, then undo the insertion (one step) — table gone

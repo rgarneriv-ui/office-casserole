@@ -14,6 +14,16 @@ export interface TextRun {
   marks: Mark[];
 }
 
+export type ColAlign = "left" | "center" | "right" | null;
+
+export interface TableStyle {
+  headerRow?: boolean;
+  /** one entry per column; null = default */
+  aligns?: ColAlign[];
+  /** relative column widths, one per column (normalized by renderers) */
+  widths?: number[];
+}
+
 export interface Block {
   /** Stable identity for attribution/collaboration (ADR-0002). */
   id: string;
@@ -25,6 +35,9 @@ export interface Block {
    *  (rectangular). Tables are atomic blocks (ADR-0011): edited through
    *  dedicated set-table operations, not the caret system. */
   table?: string[][];
+  /** Table presentation (only with table): header row, per-column alignment
+   *  and relative widths. Travels inside set-table payloads. */
+  tableStyle?: TableStyle;
 }
 
 export interface DocModel {

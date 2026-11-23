@@ -92,32 +92,46 @@ const NUMBERING_XML =
   `</w:numbering>`;
 
 
-function tableXml(table: string[][]): string {
-  const colW = Math.floor(9360 / table[0]!.length); // dxa across a 6.5in text width
+function tableXml(table: string[][], style: import("../../document-model/src/types").TableStyle = {}): string {
+  const cols = table[0]!.length;
+  const totalW = 9360; // dxa across a 6.5in text width
+  const weights = style.widths ?? new Array<number>(cols).fill(1);
+  const weightSum = weights.reduce((a, b) => a + b, 0);
+  const colWs = weights.map((w) => Math.max(300, Math.floor((totalW * w) / weightSum)));
   const borders =
     `<w:tblBorders>` +
     ["top", "left", "bottom", "right", "insideH", "insideV"]
       .map((side) => `<w:${side} w:val="single" w:sz="4" w:color="auto"/>`)
       .join("") +
     `</w:tblBorders>`;
-  const grid = `<w:tblGrid>${table[0]!.map(() => `<w:gridCol w:w="${colW}"/>`).join("")}</w:tblGrid>`;
+  const grid = `<w:tblGrid>${colWs.map((w) => `<w:gridCol w:w="${w}"/>`).join("")}</w:tblGrid>`;
   const rows = table
-    .map(
-      (row) =>
-        `<w:tr>` +
+    .map((row, r) => {
+      const isHeader = style.headerRow === true && r === 0;
+      const trPr = isHeader ? `<w:trPr><w:tblHeader/></w:trPr>` : "";
+      return (
+        `<w:tr>${trPr}` +
         row
-          .map(
-            (cell) =>
-              `<w:tc><w:tcPr><w:tcW w:w="${colW}" w:type="dxa"/></w:tcPr>` +
+          .map((cell, c) => {
+            const jc = style.aligns?.[c] ? `<w:jc w:val="${style.aligns[c]}"/>` : "";
+            const pPr = jc ? `<w:pPr>${jc}</w:pPr>` : "";
+            const rPr = isHeader ? `<w:rPr><w:b/></w:rPr>` : "";
+            return (
+              `<w:tc><w:tcPr><w:tcW w:w="${colWs[c]}" w:type="dxa"/></w:tcPr>` +
               cell
                 .split("\n")
-                .map((line) => `<w:p><w:r><w:t xml:space="preserve">${xmlEscape(line)}</w:t></w:r></w:p>`)
+                .map(
+                  (line) =>
+                    `<w:p>${pPr}<w:r>${rPr}<w:t xml:space="preserve">${xmlEscape(line)}</w:t></w:r></w:p>`
+                )
                 .join("") +
               `</w:tc>`
-          )
+            );
+          })
           .join("") +
         `</w:tr>`
-    )
+      );
+    })
     .join("");
   return `<w:tbl><w:tblPr>${borders}</w:tblPr>${grid}${rows}</w:tbl>`;
 }
@@ -127,7 +141,7 @@ function documentXml(model: DocModel): string {
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
     `<w:document xmlns:w="${W_NS}"><w:body>` +
     model.blocks
-      .map((b) => (b.type === "table" && b.table ? tableXml(b.table) : paragraphXml(b)))
+      .map((b) => (b.type === "table" && b.table ? tableXml(b.table, b.tableStyle) : paragraphXml(b)))
       .join("") +
     `<w:sectPr/></w:body></w:document>`
   );
@@ -286,25 +300,55 @@ export async function importDocx(
       const data: string[][] = [];
       let spanSeen = false;
       let marksSeen = false;
+      let headerRow = false;
+      const colWidths: number[] = [];
+      for (const gc of descendantsByLocalName(el, "gridCol")) {
+        const w = Number(wAttr(gc, "w"));
+        if (Number.isFinite(w) && w > 0) colWidths.push(w);
+      }
+      const aligns: (string | null)[] = [];
+      let rowIndex = 0;
       for (const tr of descendantsByLocalName(el, "tr")) {
+        if (rowIndex === 0 && descendantsByLocalName(tr, "tblHeader").length > 0) headerRow = true;
         const row: string[] = [];
+        let colIndex = 0;
         for (const tc of childrenByLocalName(tr, "tc")) {
           const texts = descendantsByLocalName(tc, "p").map((p) =>
             descendantsByLocalName(p, "t").map((t) => t.textContent ?? "").join("")
           );
           row.push(texts.join("\n"));
+          if (rowIndex === (headerRow ? 1 : 0)) {
+            // sample alignment from the first body row
+            const jcEl = descendantsByLocalName(tc, "jc")[0];
+            const jc = jcEl ? wAttr(jcEl, "val") : null;
+            aligns[colIndex] = jc === "left" || jc === "center" || jc === "right" ? jc : null;
+          }
           if (descendantsByLocalName(tc, "gridSpan").length > 0 || descendantsByLocalName(tc, "vMerge").length > 0) spanSeen = true;
           for (const rPr of descendantsByLocalName(tc, "rPr")) {
-            if (childrenByLocalName(rPr, "b").length || childrenByLocalName(rPr, "i").length || childrenByLocalName(rPr, "u").length) marksSeen = true;
+            const isHeaderCell = headerRow && rowIndex === 0;
+            if ((childrenByLocalName(rPr, "b").length > 0 && !isHeaderCell) || childrenByLocalName(rPr, "i").length || childrenByLocalName(rPr, "u").length) marksSeen = true;
           }
+          colIndex++;
         }
         if (row.length > 0) data.push(row);
+        rowIndex++;
       }
       if (data.length === 0) continue;
       const cols = Math.max(...data.map((r) => r.length));
       for (const row of data) while (row.length < cols) row.push("");
       const tableBlock = newBlock("table");
       tableBlock.table = data;
+      const styleOut: import("../../document-model/src/types").TableStyle = {};
+      if (headerRow) styleOut.headerRow = true;
+      if (colWidths.length === cols) {
+        const min = Math.min(...colWidths);
+        const rel = colWidths.map((w) => Math.round((w / min) * 100) / 100);
+        if (rel.some((w) => Math.abs(w - 1) > 0.05)) styleOut.widths = rel;
+      }
+      if (aligns.slice(0, cols).some((a) => a)) {
+        styleOut.aligns = Array.from({ length: cols }, (_, c) => (aligns[c] ?? null) as import("../../document-model/src/types").ColAlign);
+      }
+      if (Object.keys(styleOut).length > 0) tableBlock.tableStyle = styleOut;
       model.blocks.push(tableBlock);
       if (spanSeen)
         warnings.push({ code: "DOCX-IMPORT-TABLE-SPAN", message: "Merged table cells flattened (spans not yet supported).", blockIndex: bi });

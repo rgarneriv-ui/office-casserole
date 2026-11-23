@@ -233,3 +233,28 @@ test("docx: nested lists round-trip ilvl and multi-level definitions", async () 
   assert.equal(report.lossless, true, JSON.stringify(report.warnings));
   assert.deepEqual(model.blocks.map((b) => [b.type, b.indent ?? 0]), [["numbered", 0], ["numbered", 1], ["bullet", 2]]);
 });
+
+test("docx: table style (header, widths, aligns) round-trips", async () => {
+  const { insertTable, setTableCell, setTableStyle } = await import("../../document-model/src/operations.js");
+  const d: DocModel = { schemaVersion: SCHEMA_VERSION, blocks: [newBlock("paragraph", [{ text: "Intro", marks: [] }])] };
+  insertTable(d, { block: 0, offset: 5 }, 2, 3);
+  setTableCell(d, 1, 0, 0, "Service");
+  setTableCell(d, 1, 1, 2, "right-cell");
+  setTableStyle(d, 1, { aligns: [null, "center", "right"], widths: [2, 1, 1] });
+  const { bytes } = await exportDocx(d);
+  const entries = await zipRead(bytes);
+  const docXml = new TextDecoder().decode(entries.find((e) => e.name === "word/document.xml")!.data);
+  assert.ok(docXml.includes("<w:tblHeader/>"), "header row marked");
+  assert.ok(docXml.includes('<w:jc w:val="right"/>'), "alignment emitted");
+  assert.ok(docXml.includes("<w:rPr><w:b/></w:rPr>"), "header runs bold");
+  const widths = [...docXml.matchAll(/<w:gridCol w:w="(\d+)"\/>/g)].map((m) => Number(m[1]));
+  assert.equal(widths.length, 3);
+  assert.ok(Math.abs(widths[0]! / widths[1]! - 2) < 0.05, `2:1:1 widths, got ${widths}`);
+
+  const { model, report } = await importDocx(bytes, parseXml);
+  assert.equal(report.lossless, true, JSON.stringify(report.warnings));
+  const tbl = model.blocks.find((b) => b.type === "table")!;
+  assert.equal(tbl.tableStyle?.headerRow, true);
+  assert.deepEqual(tbl.tableStyle?.aligns, [null, "center", "right"]);
+  assert.ok(tbl.tableStyle?.widths && Math.abs(tbl.tableStyle.widths[0]! / tbl.tableStyle.widths[1]! - 2) < 0.1);
+});

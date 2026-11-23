@@ -89,10 +89,26 @@ export function toHTML(model: DocModel): string {
   for (const block of model.blocks) {
     if (block.type === "table" && block.table) {
       closeAll();
+      const style = block.tableStyle ?? {};
+      const cols = block.table[0]!.length;
+      const widths = style.widths;
+      const total = widths ? widths.reduce((a, b) => a + b, 0) : 0;
+      const colgroup = widths
+        ? `<colgroup>${widths.map((w) => `<col style="width:${((w / total) * 100).toFixed(1)}%"/>`).join("")}</colgroup>\n`
+        : "";
+      const cellTag = (r: number) => (style.headerRow && r === 0 ? "th" : "td");
+      const alignAttr = (c: number) =>
+        style.aligns?.[c] ? ` style="text-align:${style.aligns[c]}"` : "";
       const rows = block.table
-        .map((row) => `<tr>${row.map((c) => `<td>${escapeHtml(c)}</td>`).join("")}</tr>`)
+        .map(
+          (row, r) =>
+            `<tr>${row
+              .map((cell, c) => `<${cellTag(r)}${alignAttr(c)}>${escapeHtml(cell)}</${cellTag(r)}>`)
+              .join("")}</tr>`
+        )
         .join("\n");
-      parts.push(`<table border="1" cellspacing="0" cellpadding="4">\n${rows}\n</table>`);
+      parts.push(`<table border="1" cellspacing="0" cellpadding="4">\n${colgroup}${rows}\n</table>`);
+      void cols;
       continue;
     }
     if (block.type === "bullet" || block.type === "numbered") {
@@ -142,8 +158,13 @@ export function toMarkdown(model: DocModel): { markdown: string; report: LossRep
         return c.replace(/\n/g, " ").replace(/\|/g, "\\|");
       };
       const t = block.table;
+      const aligns = block.tableStyle?.aligns;
+      const sep = (c: number) => {
+        const a = aligns?.[c];
+        return a === "center" ? " :---: " : a === "right" ? " ---: " : a === "left" ? " :--- " : " --- ";
+      };
       const line = (row: string[]) => `| ${row.map(esc).join(" | ")} |`;
-      const md = [line(t[0]!), `|${t[0]!.map(() => " --- ").join("|")}|`, ...t.slice(1).map(line)];
+      const md = [line(t[0]!), `|${t[0]!.map((_, c) => sep(c)).join("|")}|`, ...t.slice(1).map(line)];
       lines.push(md.join("\n"));
       return;
     }

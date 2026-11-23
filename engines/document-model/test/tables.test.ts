@@ -119,7 +119,7 @@ test("serializers: HTML grid, Markdown pipes with escaping, inspector label, dif
   setTableCell(d, 1, 1, 0, "multi\nline");
   const html = toHTML(d);
   assert.ok(html.includes("<table"), html);
-  assert.ok(html.includes("<td>Col|A</td>"));
+  assert.ok(html.includes("<th>Col|A</th>"));
   const { markdown, report } = toMarkdown(d);
   assert.ok(markdown.includes("| Col\\|A |"), markdown);
   assert.ok(markdown.includes("| --- | --- |"));
@@ -149,4 +149,40 @@ test("transform: set-table shifts across splits/merges and conflicts on conteste
   const tb2: PrimOp = { ...tb, afterTable: [["y"]] } as PrimOp;
   assert.equal(transformOp(tb2, tb, "right").conflict, true, "diverging conversions conflict");
   assert.equal(transformOp(structuredClone(tb), tb, "right").conflict, false, "identical conversions dedupe");
+});
+
+// ---------- table style (WO-29) ----------
+import { setTableStyle } from "../src/operations";
+
+test("table style: header default, setTableStyle inverts exactly, column ops adjust arrays", () => {
+  const d = doc();
+  const log2 = new TransactionLog();
+  log2.begin();
+  insertTable(d, { block: 0, offset: 17 }, 2, 3, log2);
+  assert.deepEqual(d.blocks[1]!.tableStyle, { headerRow: true }, "tables default to a header row");
+  const snapshot = JSON.stringify(d);
+  log2.begin(null, Date.now() + 5000);
+  setTableStyle(d, 1, { aligns: [null, "center", "right"], widths: [2, 1, 1] }, log2);
+  assert.deepEqual(d.blocks[1]!.tableStyle, { headerRow: true, aligns: [null, "center", "right"], widths: [2, 1, 1] });
+  assert.deepEqual(validateModel(d), []);
+  log2.begin(null, Date.now() + 10000);
+  editTable(d, 1, "add-col", log2);
+  assert.deepEqual(d.blocks[1]!.tableStyle!.aligns, [null, "center", "right", null], "aligns track new column");
+  assert.deepEqual(d.blocks[1]!.tableStyle!.widths, [2, 1, 1, 1]);
+  log2.undo(d);
+  log2.undo(d);
+  assert.equal(JSON.stringify(d), snapshot, "style edits unwind exactly");
+});
+
+test("table style: HTML th/colgroup/align and Markdown alignment colons", () => {
+  const d = doc();
+  insertTable(d, { block: 0, offset: 17 }, 2, 2);
+  setTableCell(d, 1, 0, 0, "H1");
+  setTableCell(d, 1, 0, 1, "H2");
+  setTableStyle(d, 1, { aligns: ["left", "right"], widths: [3, 1] });
+  const html = toHTML(d);
+  assert.ok(html.includes('<col style="width:75.0%"/>'), html);
+  assert.ok(html.includes('<th style="text-align:left">H1</th>'));
+  const { markdown } = toMarkdown(d);
+  assert.ok(markdown.includes("| :--- | ---: |"), markdown);
 });

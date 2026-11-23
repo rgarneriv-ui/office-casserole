@@ -88,7 +88,18 @@ export function validateModel(model: DocModel): string[] {
       if (!t || t.length === 0 || t[0]!.length === 0) errors.push(`block ${i}: empty table`);
       else if (!t.every((row) => row.length === t[0]!.length && row.every((c) => typeof c === "string")))
         errors.push(`block ${i}: table is not rectangular`);
-    } else if (b.table !== undefined) {
+      else if (b.tableStyle) {
+        const cols = t[0]!.length;
+        if (b.tableStyle.aligns && b.tableStyle.aligns.length !== cols)
+          errors.push(`block ${i}: tableStyle.aligns length mismatch`);
+        if (b.tableStyle.widths) {
+          if (b.tableStyle.widths.length !== cols)
+            errors.push(`block ${i}: tableStyle.widths length mismatch`);
+          else if (!b.tableStyle.widths.every((w) => typeof w === "number" && w > 0))
+            errors.push(`block ${i}: tableStyle.widths must be positive`);
+        }
+      }
+    } else if (b.table !== undefined || b.tableStyle !== undefined) {
       errors.push(`block ${i}: non-table block carries table data`);
     }
     if (b.indent !== undefined) {

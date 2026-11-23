@@ -182,3 +182,22 @@ test("pdf: long tables paginate by rows, deterministically", () => {
   assert.ok(count > 1, `paginated: ${count} pages`);
   assert.ok(dec.decode(a.bytes).includes("(Row 60)"), "last row present");
 });
+
+test("pdf: styled tables — bold header, weighted columns, right alignment", () => {
+  const tbl = newBlock("table");
+  tbl.table = [["Service", "Amount"], ["Review", "450"]];
+  tbl.tableStyle = { headerRow: true, aligns: [null, "right"], widths: [3, 1] };
+  const model: DocModel = { schemaVersion: SCHEMA_VERSION, blocks: [tbl] };
+  const { bytes } = exportPdf(model);
+  const text = dec.decode(bytes);
+  assert.ok(/\/FB \d+ Tf [\d.]+ [\d.]+ Td \(Service\)/.test(text), "header rendered bold");
+  assert.ok(/\/FR \d+ Tf [\d.]+ [\d.]+ Td \(Review\)/.test(text), "body regular");
+  // 3:1 widths over a 468pt measure: second column starts at 72+351=423
+  const vlines = [...text.matchAll(/([\d.]+) [\d.]+ m \1 [\d.]+ l/g)].map((m) => Number(m[1]));
+  assert.ok(vlines.some((x) => Math.abs(x - 423) < 1), `weighted divider at 423, got ${[...new Set(vlines)]}`);
+  // right-aligned numeric cell ends near the right edge of its column (540-4)
+  const amt = /Tf ([\d.]+) [\d.]+ Td \(450\)/.exec(text);
+  assert.ok(amt, "cell present");
+  const end = Number(amt![1]) + measureText("450", "R", 11, "helvetica");
+  assert.ok(Math.abs(end - 536) < 1, `right-aligned to column edge, ends ${end.toFixed(1)}`);
+});

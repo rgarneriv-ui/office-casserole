@@ -14,6 +14,7 @@ import {
   insertTable,
   removeTable,
   setTableCell,
+  setTableStyle,
   DocRange,
   TransactionLog,
   applyOp,
@@ -59,6 +60,7 @@ let model: DocModel = newDocument();
 let selection: DocRange = { anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 0 } };
 let caretMarks: Mark[] | null = null; // pending marks for a collapsed caret
 let activeTableBlock: number | null = null;
+let activeTableCol = 0;
 let listLabels: string[] = [];
 const log = new TransactionLog();
 
@@ -234,17 +236,25 @@ function writeSelection(): void {
 // ---------- rendering ----------
 function renderBlock(block: Block, index: number): string {
   if (block.type === "table" && block.table) {
+    const style = block.tableStyle ?? {};
+    const cols = block.table[0]!.length;
+    const weights = style.widths ?? new Array<number>(cols).fill(1);
+    const weightSum = weights.reduce((a, b) => a + b, 0);
+    const colgroup = `<colgroup>${weights
+      .map((w) => `<col style="width:${((w / weightSum) * 100).toFixed(1)}%">`)
+      .join("")}</colgroup>`;
     const rows = block.table
       .map(
         (row, r) =>
           `<tr>${row
-            .map(
-              (cell, c) =>
-                `<td data-r="${r}" data-c="${c}">${cell
-                  .replace(/&/g, "&amp;")
-                  .replace(/</g, "&lt;")
-                  .replace(/\n/g, "<br>") || "&nbsp;"}</td>`
-            )
+            .map((cell, c) => {
+              const tag = style.headerRow && r === 0 ? "th" : "td";
+              const align = style.aligns?.[c] ? ` style="text-align:${style.aligns[c]}"` : "";
+              return `<${tag} data-r="${r}" data-c="${c}"${align}>${cell
+                .replace(/&/g, "&amp;")
+                .replace(/</g, "&lt;")
+                .replace(/\n/g, "<br>") || "&nbsp;"}</${tag}>`;
+            })
             .join("")}</tr>`
       )
       .join("");
@@ -253,9 +263,13 @@ function renderBlock(block: Block, index: number): string {
         ? `<div class="tbl-controls" contenteditable="false">` +
           `<button data-tedit="add-row">+ Row</button><button data-tedit="remove-row">− Row</button>` +
           `<button data-tedit="add-col">+ Col</button><button data-tedit="remove-col">− Col</button>` +
+          `<button data-tedit="header" class="${style.headerRow ? "on" : ""}">Header</button>` +
+          `<button data-tedit="align" title="Cycle alignment of the last-clicked column">Align col</button>` +
+          `<button data-tedit="wider" title="Widen the last-clicked column">⟷+</button>` +
+          `<button data-tedit="narrower" title="Narrow the last-clicked column">⟷−</button>` +
           `<button data-tedit="delete">✕ Table</button></div>`
         : "";
-    return `<div class="tbl-wrap" contenteditable="false" data-block="${index}"><table class="cas-table">${rows}</table>${controls}</div>`;
+    return `<div class="tbl-wrap" contenteditable="false" data-block="${index}"><table class="cas-table">${colgroup}${rows}</table>${controls}</div>`;
   }
   const tag = BLOCK_TAG[block.type] ?? "p";
   const isListBlock = block.type === "bullet" || block.type === "numbered";
@@ -1056,7 +1070,7 @@ function openCellInput(bi: number, r: number, c: number, td: HTMLElement): void 
         const nc = c + 1 < table[0]!.length ? c + 1 : 0;
         const nr = nc === 0 ? (r + 1) % table.length : r;
         const next = editor.querySelector(
-          `[data-block="${bi}"] td[data-r="${nr}"][data-c="${nc}"]`
+          `[data-block="${bi}"] [data-r="${nr}"][data-c="${nc}"]`
         ) as HTMLElement | null;
         if (next) openCellInput(bi, nr, nc, next);
       }
@@ -1071,7 +1085,7 @@ function openCellInput(bi: number, r: number, c: number, td: HTMLElement): void 
 }
 
 editor.addEventListener("click", (e) => {
-  const td = (e.target as HTMLElement).closest("td[data-r]") as HTMLElement | null;
+  const td = (e.target as HTMLElement).closest("td[data-r], th[data-r]") as HTMLElement | null;
   const wrap = (e.target as HTMLElement).closest(".tbl-wrap") as HTMLElement | null;
   const btn = (e.target as HTMLElement).closest("[data-tedit]") as HTMLButtonElement | null;
   if (btn && wrap) {
@@ -1082,6 +1096,28 @@ editor.addEventListener("click", (e) => {
       log.begin();
       removeTable(model, bi, log);
       activeTableBlock = null;
+    } else if (action === "header") {
+      log.begin();
+      setTableStyle(model, bi, { headerRow: !(model.blocks[bi]?.tableStyle?.headerRow ?? false) }, log);
+    } else if (action === "align" || action === "wider" || action === "narrower") {
+      const blk = model.blocks[bi];
+      if (!blk?.table) return;
+      const cols = blk.table[0]!.length;
+      const c = Math.min(activeTableCol, cols - 1);
+      log.begin();
+      if (action === "align") {
+        const cycle: ("left" | "center" | "right" | null)[] = [null, "center", "right", "left"];
+        const cur = blk.tableStyle?.aligns?.[c] ?? null;
+        const next = cycle[(cycle.indexOf(cur) + 1) % cycle.length]!;
+        const aligns = (blk.tableStyle?.aligns ?? new Array(cols).fill(null)).slice();
+        aligns[c] = next;
+        setTableStyle(model, bi, { aligns }, log);
+        statusEl.textContent = `Column ${c + 1} aligned ${next ?? "default"}`;
+      } else {
+        const widths = (blk.tableStyle?.widths ?? new Array<number>(cols).fill(1)).slice();
+        widths[c] = Math.max(0.3, Math.min(5, widths[c]! * (action === "wider" ? 1.25 : 0.8)));
+        setTableStyle(model, bi, { widths }, log);
+      }
     } else {
       log.begin();
       editTable(model, bi, action as TableEdit, log);
@@ -1092,11 +1128,12 @@ editor.addEventListener("click", (e) => {
   }
   if (td && wrap) {
     const bi = Number(wrap.dataset.block);
+    activeTableCol = Number(td.dataset.c ?? 0);
     if (activeTableBlock !== bi) {
       activeTableBlock = bi;
       render();
       const again = editor.querySelector(
-        `[data-block="${bi}"] td[data-r="${td.dataset.r}"][data-c="${td.dataset.c}"]`
+        `[data-block="${bi}"] [data-r="${td.dataset.r}"][data-c="${td.dataset.c}"]`
       ) as HTMLElement | null;
       if (again) openCellInput(bi, Number(td.dataset.r), Number(td.dataset.c), again);
       return;

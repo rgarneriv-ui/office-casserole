@@ -23,6 +23,7 @@ import {
   sortMarks,
 } from "./model";
 import { OpRecorder, PrimOp, applyOp } from "./oplog";
+import type { TableStyle } from "./types";
 
 function emit(model: DocModel, op: PrimOp, rec?: OpRecorder): void {
   rec?.record(op); // record first: recorder deep-copies, apply mutates
@@ -272,28 +273,34 @@ export function setListIndent(
 
 // ---------- tables (atomic blocks, ADR-0011) ----------
 
+function cloneStyle(style: TableStyle | undefined): TableStyle | null {
+  return style ? (JSON.parse(JSON.stringify(style)) as TableStyle) : null;
+}
+
 function tableOp(
   model: DocModel,
   blockIndex: number,
   afterType: BlockType,
   afterTable: string[][] | null,
-  rec?: OpRecorder
+  rec?: OpRecorder,
+  afterStyle?: TableStyle | null
 ): void {
   const block = model.blocks[blockIndex];
   if (!block) throw new Error(`tableOp: no block ${blockIndex}`);
-  emit(
-    model,
-    {
-      t: "set-table",
-      block: blockIndex,
-      beforeType: block.type,
-      afterType,
-      beforeTable: block.table ? block.table.map((r) => [...r]) : null,
-      afterTable,
-      beforeRuns: block.runs.map((r) => ({ text: r.text, marks: [...r.marks] })),
-    },
-    rec
-  );
+  const op: PrimOp = {
+    t: "set-table",
+    block: blockIndex,
+    beforeType: block.type,
+    afterType,
+    beforeTable: block.table ? block.table.map((r) => [...r]) : null,
+    afterTable,
+    beforeRuns: block.runs.map((r) => ({ text: r.text, marks: [...r.marks] })),
+  };
+  const before = cloneStyle(block.tableStyle);
+  const after = afterTable === null ? null : afterStyle !== undefined ? afterStyle : before;
+  if (before !== null) op.beforeStyle = before;
+  if (after !== null && after !== undefined) op.afterStyle = after;
+  emit(model, op, rec);
 }
 
 /** Insert an empty rows×cols table after the caret block; returns the caret
@@ -314,7 +321,7 @@ export function insertTable(
   // split twice at the end: [..block][tableSlot][after]; caret lands on after
   splitBlock(model, { block: pos.block, offset: end }, rec);
   splitBlock(model, { block: pos.block + 1, offset: 0 }, rec);
-  tableOp(model, pos.block + 1, "table", data, rec);
+  tableOp(model, pos.block + 1, "table", data, rec, { headerRow: true });
   return { block: pos.block + 2, offset: 0 };
 }
 
@@ -347,12 +354,50 @@ export function editTable(
   const table = model.blocks[blockIndex]?.table;
   if (!table) throw new Error(`editTable: block ${blockIndex} is not a table`);
   let next = table.map((r) => [...r]);
+  const style = model.blocks[blockIndex]!.tableStyle
+    ? (JSON.parse(JSON.stringify(model.blocks[blockIndex]!.tableStyle)) as TableStyle)
+    : undefined;
   if (edit === "add-row") next.push(new Array<string>(next[0]!.length).fill(""));
   else if (edit === "remove-row" && next.length > 1) next = next.slice(0, -1);
-  else if (edit === "add-col") next = next.map((r) => [...r, ""]);
-  else if (edit === "remove-col" && next[0]!.length > 1) next = next.map((r) => r.slice(0, -1));
-  else return; // removing the last row/col is a no-op, not a crash
-  tableOp(model, blockIndex, "table", next, rec);
+  else if (edit === "add-col") {
+    next = next.map((r) => [...r, ""]);
+    if (style?.aligns) style.aligns.push(null);
+    if (style?.widths) style.widths.push(1);
+  } else if (edit === "remove-col" && next[0]!.length > 1) {
+    next = next.map((r) => r.slice(0, -1));
+    if (style?.aligns) style.aligns.pop();
+    if (style?.widths) style.widths.pop();
+  } else return; // removing the last row/col is a no-op, not a crash
+  tableOp(model, blockIndex, "table", next, rec, style ?? null);
+}
+
+/** Merge a style patch into a table's presentation. Per-column arrays are
+ *  normalized to the column count. */
+export function setTableStyle(
+  model: DocModel,
+  blockIndex: number,
+  patch: Partial<TableStyle>,
+  rec?: OpRecorder
+): void {
+  const block = model.blocks[blockIndex];
+  if (!block?.table) throw new Error(`setTableStyle: block ${blockIndex} is not a table`);
+  const cols = block.table[0]!.length;
+  const cur: TableStyle = block.tableStyle
+    ? (JSON.parse(JSON.stringify(block.tableStyle)) as TableStyle)
+    : {};
+  const next: TableStyle = { ...cur, ...patch };
+  if (next.headerRow === false) delete next.headerRow;
+  if (next.aligns) {
+    next.aligns = next.aligns.slice(0, cols);
+    while (next.aligns.length < cols) next.aligns.push(null);
+    if (next.aligns.every((a) => a === null)) delete next.aligns;
+  }
+  if (next.widths) {
+    next.widths = next.widths.slice(0, cols).map((w) => Math.max(0.2, w));
+    while (next.widths.length < cols) next.widths.push(1);
+  }
+  tableOp(model, blockIndex, "table", block.table.map((r) => [...r]), rec,
+    Object.keys(next).length > 0 ? next : null);
 }
 
 /** Convert a table back to an empty paragraph (content intentionally dropped —
@@ -360,17 +405,16 @@ export function editTable(
 export function removeTable(model: DocModel, blockIndex: number, rec?: OpRecorder): void {
   const block = model.blocks[blockIndex];
   if (!block?.table) return;
-  emit(
-    model,
-    {
-      t: "set-table",
-      block: blockIndex,
-      beforeType: "table",
-      afterType: "paragraph",
-      beforeTable: block.table.map((r) => [...r]),
-      afterTable: null,
-      beforeRuns: [],
-    },
-    rec
-  );
+  const op: PrimOp = {
+    t: "set-table",
+    block: blockIndex,
+    beforeType: "table",
+    afterType: "paragraph",
+    beforeTable: block.table.map((r) => [...r]),
+    afterTable: null,
+    beforeRuns: [],
+  };
+  const before = cloneStyle(block.tableStyle);
+  if (before !== null) op.beforeStyle = before;
+  emit(model, op, rec);
 }

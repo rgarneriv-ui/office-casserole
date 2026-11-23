@@ -11,7 +11,7 @@
  * tests, not asserted.
  */
 
-import { Block, BlockType, DocModel, TextRun } from "./types";
+import { Block, BlockType, DocModel, TableStyle, TextRun } from "./types";
 import { normalizeBlock, normalizeModel, splitRunsAt } from "./model";
 
 export type PrimOp =
@@ -61,6 +61,8 @@ export type PrimOp =
       afterType: BlockType;
       beforeTable: string[][] | null;
       afterTable: string[][] | null;
+      beforeStyle?: TableStyle | null;
+      afterStyle?: TableStyle | null;
       /** runs the block held before becoming a table (for exact inversion) */
       beforeRuns: TextRun[];
     }
@@ -135,8 +137,11 @@ export function applyOp(model: DocModel, op: PrimOp): void {
       if (op.afterTable !== null) {
         block.table = op.afterTable.map((row) => [...row]);
         block.runs = [];
+        if (op.afterStyle) block.tableStyle = structuredCloneOpStyle(op.afterStyle);
+        else delete block.tableStyle;
       } else {
         delete block.table;
+        delete block.tableStyle;
         block.runs = op.afterType === op.beforeType && op.beforeTable === null
           ? block.runs
           : cloneRuns(op.beforeRuns);
@@ -195,8 +200,8 @@ export function invertOp(op: PrimOp): PrimOp {
       if (op.beforeIndent !== undefined) inv.afterIndent = op.beforeIndent;
       return inv;
     }
-    case "set-table":
-      return {
+    case "set-table": {
+      const inv: PrimOp = {
         t: "set-table",
         block: op.block,
         beforeType: op.afterType,
@@ -205,6 +210,10 @@ export function invertOp(op: PrimOp): PrimOp {
         afterTable: op.beforeTable,
         beforeRuns: op.beforeRuns, // restored when reverting to the non-table side
       };
+      if (op.afterStyle !== undefined) inv.beforeStyle = op.afterStyle;
+      if (op.beforeStyle !== undefined) inv.afterStyle = op.beforeStyle;
+      return inv;
+    }
     case "replace-model":
       return { t: "replace-model", before: op.after, after: op.before };
   }
@@ -352,4 +361,10 @@ function structuredCloneOp(op: PrimOp): PrimOp {
   return typeof structuredClone === "function"
     ? structuredClone(op)
     : (JSON.parse(JSON.stringify(op)) as PrimOp);
+}
+
+function structuredCloneOpStyle(style: TableStyle): TableStyle {
+  return typeof structuredClone === "function"
+    ? structuredClone(style)
+    : (JSON.parse(JSON.stringify(style)) as TableStyle);
 }
