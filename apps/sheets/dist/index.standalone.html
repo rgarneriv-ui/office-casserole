@@ -52,6 +52,7 @@
 </style>
 </head>
 <body>
+  <div id="ribbon"></div>
   <header>
     <span class="logo">Casserole <em>Sheets</em></span>
     <span id="addr">A1</span>
@@ -1451,6 +1452,122 @@
     return { sheet: sheet2, report: { format: "xlsx", lossless: warnings.length === 0, warnings } };
   }
 
+  // apps/shared/ribbon.ts
+  var CSS = `
+#ribbon { background: #f3f1ec; border-bottom: 1px solid #d5d2c8; font-size: 13px; user-select: none; }
+#ribbon .rb-tabs { display: flex; gap: 2px; padding: 4px 8px 0; align-items: flex-end; }
+#ribbon .rb-tab { border: 1px solid transparent; border-bottom: none; background: none;
+  padding: 4px 14px; cursor: pointer; font: inherit; border-radius: 4px 4px 0 0; color: #444; }
+#ribbon .rb-tab.active { background: #fbfaf7; border-color: #d5d2c8; color: #1a1a1a; font-weight: 600; }
+#ribbon .rb-qat { margin-left: auto; display: flex; gap: 2px; align-items: center; padding-bottom: 2px; }
+#ribbon .rb-qat button { font-size: 14px; padding: 2px 8px; }
+#ribbon .rb-panel { display: none; background: #fbfaf7; padding: 4px 8px 2px; }
+#ribbon .rb-panel.active { display: flex; gap: 4px; align-items: stretch; overflow-x: auto; }
+#ribbon .rb-group { display: flex; flex-direction: column; border-right: 1px solid #e2dfd6; padding: 0 8px 0 4px; min-width: 56px; }
+#ribbon .rb-group:last-child { border-right: none; }
+#ribbon .rb-controls { display: flex; gap: 3px; align-items: center; flex: 1; flex-wrap: wrap; max-height: 64px; align-content: flex-start; }
+#ribbon .rb-gname { text-align: center; font-size: 10.5px; color: #8a8578; padding: 1px 0 2px; }
+#ribbon .rb-controls button, #ribbon .rb-controls select {
+  font: inherit; background: none; border: 1px solid transparent; border-radius: 4px;
+  padding: 3px 7px; cursor: pointer; color: #222; }
+#ribbon .rb-controls select { background: #fff; border-color: #d5d2c8; max-width: 150px; }
+#ribbon .rb-controls button:hover:not(:disabled) { background: #eceade; border-color: #d8d4c4; }
+#ribbon .rb-controls button.active { background: #e3e0d0; border-color: #c9c4ae; }
+#ribbon .rb-controls button:disabled { color: #b5b0a2; cursor: default; }
+#ribbon .rb-big { display: flex; flex-direction: column; align-items: center; min-width: 46px;
+  padding: 2px 6px !important; line-height: 1.15; max-height: none; }
+#ribbon .rb-big .rb-ico { font-size: 19px; }
+#ribbon .rb-big .rb-lbl { font-size: 11px; white-space: pre-line; text-align: center; }
+`;
+  function makeButton(label, icon, big, title) {
+    const b = document.createElement("button");
+    if (big) {
+      b.className = "rb-big";
+      b.innerHTML = `<span class="rb-ico">${icon ?? ""}</span><span class="rb-lbl"></span>`;
+      b.querySelector(".rb-lbl").textContent = label;
+    } else {
+      b.textContent = icon ? `${icon} ${label}` : label;
+    }
+    if (title) b.title = title;
+    return b;
+  }
+  function buildRibbon(mount, tabs, qatIds = []) {
+    if (!document.getElementById("ribbon-css")) {
+      const style = document.createElement("style");
+      style.id = "ribbon-css";
+      style.textContent = CSS;
+      document.head.appendChild(style);
+    }
+    mount.innerHTML = "";
+    const tabStrip = document.createElement("div");
+    tabStrip.className = "rb-tabs";
+    const panels = [];
+    tabs.forEach((tab, ti) => {
+      const tb = document.createElement("button");
+      tb.className = "rb-tab" + (ti === 0 ? " active" : "");
+      tb.textContent = tab.name;
+      tb.dataset.tab = tab.name;
+      tb.addEventListener("click", () => {
+        tabStrip.querySelectorAll(".rb-tab").forEach((t) => t.classList.remove("active"));
+        panels.forEach((p) => p.classList.remove("active"));
+        tb.classList.add("active");
+        panels[ti].classList.add("active");
+      });
+      tabStrip.appendChild(tb);
+      const panel = document.createElement("div");
+      panel.className = "rb-panel" + (ti === 0 ? " active" : "");
+      panel.dataset.panel = tab.name;
+      for (const group of tab.groups) {
+        const g = document.createElement("div");
+        g.className = "rb-group";
+        const ctl = document.createElement("div");
+        ctl.className = "rb-controls";
+        for (const c of group.controls) {
+          if (c.kind === "ph") {
+            const b = makeButton(c.label, c.icon, c.big, `${c.label} \u2014 not yet implemented in Casserole`);
+            b.disabled = true;
+            b.dataset.ph = "1";
+            ctl.appendChild(b);
+          } else if (c.kind === "action") {
+            const b = makeButton(c.label, c.icon, c.big, c.title ?? c.label);
+            b.addEventListener("click", c.onClick);
+            ctl.appendChild(b);
+          } else {
+            const el = document.getElementById(c.id);
+            if (!el) continue;
+            if (c.label && el instanceof HTMLButtonElement) {
+              if (c.big) {
+                el.classList.add("rb-big");
+                el.innerHTML = `<span class="rb-ico">${c.icon ?? ""}</span><span class="rb-lbl"></span>`;
+                el.querySelector(".rb-lbl").textContent = c.label;
+              } else {
+                el.textContent = c.icon ? `${c.icon} ${c.label}` : c.label;
+              }
+            }
+            if (c.title) el.title = c.title;
+            ctl.appendChild(el);
+          }
+        }
+        const name = document.createElement("div");
+        name.className = "rb-gname";
+        name.textContent = group.name;
+        g.appendChild(ctl);
+        g.appendChild(name);
+        panel.appendChild(g);
+      }
+      panels.push(panel);
+    });
+    const qat = document.createElement("div");
+    qat.className = "rb-qat";
+    for (const id of qatIds) {
+      const el = document.getElementById(id);
+      if (el) qat.appendChild(el);
+    }
+    tabStrip.appendChild(qat);
+    mount.appendChild(tabStrip);
+    panels.forEach((p) => mount.appendChild(p));
+  }
+
   // apps/sheets/src/main.ts
   var COLS = 12;
   var ROWS = 40;
@@ -1952,6 +2069,124 @@
   restore();
   refreshValues();
   formulaEl.focus();
+  function sendClipKey(key) {
+    formulaEl.dispatchEvent(
+      new KeyboardEvent("keydown", { key, ctrlKey: true, bubbles: true, cancelable: true })
+    );
+  }
+  buildRibbon(
+    document.getElementById("ribbon"),
+    [
+      {
+        name: "Home",
+        groups: [
+          {
+            name: "Clipboard",
+            controls: [
+              { kind: "action", label: "Paste", icon: "\u{1F4CB}", big: true, title: "Paste (Ctrl/Cmd-V)", onClick: () => sendClipKey("v") },
+              { kind: "action", label: "Cut", icon: "\u2702", title: "Cut (Ctrl/Cmd-X)", onClick: () => sendClipKey("x") },
+              { kind: "action", label: "Copy", icon: "\u2FFB", title: "Copy (Ctrl/Cmd-C)", onClick: () => sendClipKey("c") },
+              { kind: "ph", label: "Format Painter", icon: "\u{1F58C}" }
+            ]
+          },
+          {
+            name: "Font",
+            controls: [
+              { kind: "ph", label: "Calibri" },
+              { kind: "ph", label: "11" },
+              { kind: "move", id: "btn-bold" },
+              { kind: "ph", label: "I" },
+              { kind: "ph", label: "U" },
+              { kind: "ph", label: "Borders", icon: "\u229E" },
+              { kind: "ph", label: "Fill Color", icon: "\u{1FAA3}" },
+              { kind: "ph", label: "Font Color", icon: "A" }
+            ]
+          },
+          {
+            name: "Alignment",
+            controls: [
+              { kind: "move", id: "fmt-align" },
+              { kind: "ph", label: "Wrap Text" },
+              { kind: "ph", label: "Merge & Center" }
+            ]
+          },
+          {
+            name: "Number",
+            controls: [
+              { kind: "move", id: "fmt-num" },
+              { kind: "ph", label: ",", icon: "" },
+              { kind: "ph", label: ".00\u2192.0" },
+              { kind: "ph", label: ".0\u2192.00" }
+            ]
+          },
+          {
+            name: "Cells",
+            controls: [
+              { kind: "ph", label: "Insert", icon: "\u2295" },
+              { kind: "ph", label: "Delete", icon: "\u2296" },
+              { kind: "ph", label: "Format", icon: "\u25A4" }
+            ]
+          },
+          {
+            name: "Editing",
+            controls: [
+              { kind: "action", label: "AutoSum", icon: "\u03A3", title: "Start a =SUM( formula in the formula bar", onClick: () => {
+                formulaEl.value = "=SUM(";
+                formulaEl.dispatchEvent(new Event("input", { bubbles: true }));
+                formulaEl.focus();
+              } },
+              { kind: "move", id: "btn-clear", label: "Clear" },
+              { kind: "ph", label: "Sort & Filter", icon: "\u21C5" },
+              { kind: "ph", label: "Find & Select", icon: "\u{1F50D}" }
+            ]
+          }
+        ]
+      },
+      {
+        name: "Insert",
+        groups: [
+          { name: "Tables", controls: [{ kind: "ph", label: "PivotTable", big: true, icon: "\u25A6" }, { kind: "ph", label: "Table", big: true, icon: "\u229E" }] },
+          { name: "Charts", controls: [{ kind: "ph", label: "Recommended\nCharts", big: true, icon: "\u{1F4CA}" }, { kind: "ph", label: "Column" }, { kind: "ph", label: "Line" }, { kind: "ph", label: "Pie" }] },
+          { name: "Sparklines", controls: [{ kind: "ph", label: "Line" }, { kind: "ph", label: "Column" }] }
+        ]
+      },
+      {
+        name: "Formulas",
+        groups: [
+          {
+            name: "Function Library",
+            controls: [
+              { kind: "action", label: "Insert\nFunction", big: true, icon: "\u0192x", title: "Start a formula in the formula bar", onClick: () => {
+                formulaEl.value = "=";
+                formulaEl.dispatchEvent(new Event("input", { bubbles: true }));
+                formulaEl.focus();
+              } },
+              { kind: "ph", label: "Financial" },
+              { kind: "ph", label: "Logical" },
+              { kind: "ph", label: "Text" },
+              { kind: "ph", label: "Date & Time" },
+              { kind: "ph", label: "Lookup" }
+            ]
+          },
+          { name: "Calculation", controls: [{ kind: "ph", label: "Calculate Now" }] }
+        ]
+      },
+      {
+        name: "File",
+        groups: [
+          { name: "Workbook", controls: [{ kind: "move", id: "btn-open", label: "Open", icon: "\u{1F4C2}", big: true }] },
+          {
+            name: "Export",
+            controls: [
+              { kind: "move", id: "btn-export-xlsx", label: "Excel\n(.xlsx)", icon: "\u2B07", big: true },
+              { kind: "move", id: "btn-export-csv", label: "CSV", icon: "\u2B07", big: true }
+            ]
+          }
+        ]
+      }
+    ],
+    []
+  );
 })();
 
 </script>

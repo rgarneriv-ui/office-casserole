@@ -843,5 +843,34 @@
     "verification": "unit + jsdom smoke; not independently reviewed",
     "baseline": "Word find & replace (plain-text subset)",
     "offlineSupport": true
+  },
+  {
+    "id": "WRITE-RIBBON-001",
+    "name": "Office-style ribbon",
+    "application": "write",
+    "description": "Tabbed ribbon (Home/Insert/Review/File) modeled on the Microsoft Office layout: familiar tab, group and command structure with quick-access undo/redo where the app supports it. Every implemented command is re-homed into its Office group fully wired; Office controls Casserole does not support yet are rendered in place but disabled with a 'not yet implemented' tooltip. Own glyph icons \u2014 no Microsoft artwork.",
+    "status": "tested",
+    "owner": "ai",
+    "priority": "P1",
+    "dependencies": [],
+    "commands": [],
+    "acceptance": [
+      "tabs render and switch panels",
+      "existing controls keep working after the move (all prior smokes pass unchanged)",
+      "placeholders disabled with honest tooltips",
+      "at least one new ribbon-only action works (styles/clipboard/new slide)"
+    ],
+    "edgeCases": [
+      "controls are physically re-homed so listeners and ids survive",
+      "a missing control id is silently not shown rather than faked"
+    ],
+    "knownLimitations": [
+      "placeholder density is representative, not exhaustive \u2014 Office ships hundreds of commands",
+      "no contextual tabs (e.g. Table Design), no ribbon collapse, no keytips"
+    ],
+    "evidence": "scripts/smoke-write.mjs ribbon scenario",
+    "verification": "jsdom smoke; not independently reviewed",
+    "baseline": "Microsoft Office ribbon (structure + implemented-command subset)",
+    "offlineSupport": true
   }
 ]

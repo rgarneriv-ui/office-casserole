@@ -203,3 +203,30 @@ console.log("SMOKE OK — tables insert/edit/undo");
   assert(findbar.hidden, "close hides the bar");
 }
 console.log("SMOKE OK — find & replace");
+
+// Scenario 8: ribbon — tabs render, switch, placeholders honest, controls re-homed + working
+{
+  const dom = await bootDom();
+  const doc = dom.window.document;
+  const tabs = [...doc.querySelectorAll("#ribbon .rb-tab")].map((t) => t.textContent);
+  assert(JSON.stringify(tabs) === JSON.stringify(["Home", "Insert", "Review", "File"]), `Write tabs: ${tabs}`);
+  assert(doc.querySelector("#ribbon #btn-bold"), "bold re-homed into the ribbon");
+  assert(doc.querySelector("#ribbon #btn-export-docx"), "export re-homed");
+  // placeholders are disabled and say so
+  const ph = doc.querySelector('#ribbon [data-ph]');
+  assert(ph && ph.disabled && ph.title.includes("not yet implemented"), "placeholders disabled with honest tooltip");
+  // tab switching
+  const insertTab = [...doc.querySelectorAll("#ribbon .rb-tab")].find((t) => t.textContent === "Insert");
+  insertTab.click();
+  assert(doc.querySelector('#ribbon .rb-panel[data-panel="Insert"]').classList.contains("active"), "Insert panel activates");
+  assert(!doc.querySelector('#ribbon .rb-panel[data-panel="Home"]').classList.contains("active"), "Home panel deactivates");
+  // a working ribbon action: Heading 1 style button changes the current block
+  doc.querySelector('#ribbon .rb-tab').click(); // Home
+  const h1btn = [...doc.querySelectorAll('#ribbon .rb-panel[data-panel="Home"] button')].find((b) => b.title === "Heading 1");
+  assert(h1btn && !h1btn.disabled, "Heading 1 ribbon button present + enabled");
+  h1btn.click();
+  await new Promise((r) => setTimeout(r, 50));
+  assert(doc.querySelector("#editor h1"), "Heading 1 applied to the current block");
+  assert(doc.querySelector("#ribbon #block-type"), "block-type select re-homed");
+}
+console.log("SMOKE OK — Write ribbon");

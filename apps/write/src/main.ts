@@ -1543,3 +1543,132 @@ document.getElementById("find-next")?.addEventListener("click", findNext);
 document.getElementById("find-repl")?.addEventListener("click", replaceCurrent);
 document.getElementById("find-repl-all")?.addEventListener("click", replaceAllFromBar);
 document.getElementById("find-close")?.addEventListener("click", closeFindBar);
+
+// ---------- ribbon (WO-39) ----------
+import { buildRibbon } from "../../shared/ribbon";
+
+function setBlockViaRibbon(type: Block["type"]): void {
+  readSelection();
+  dispatch("setBlockType", type);
+  editor.focus();
+}
+
+buildRibbon(
+  document.getElementById("ribbon") as HTMLElement,
+  [
+    {
+      name: "Home",
+      groups: [
+        {
+          name: "Clipboard",
+          controls: [
+            { kind: "ph", label: "Paste", icon: "📋", big: true },
+            { kind: "ph", label: "Cut", icon: "✂" },
+            { kind: "ph", label: "Copy", icon: "⿻" },
+            { kind: "ph", label: "Format Painter", icon: "🖌" },
+          ],
+        },
+        {
+          name: "Font",
+          controls: [
+            { kind: "ph", label: "Calibri (Body)" },
+            { kind: "ph", label: "11" },
+            { kind: "move", id: "btn-bold" },
+            { kind: "move", id: "btn-italic" },
+            { kind: "move", id: "btn-underline" },
+            { kind: "ph", label: "ab", icon: "S̶" },
+            { kind: "ph", label: "x₂" },
+            { kind: "ph", label: "x²" },
+            { kind: "ph", label: "A", icon: "🖍" },
+          ],
+        },
+        {
+          name: "Paragraph",
+          controls: [
+            { kind: "action", label: "⁝≡", title: "Bullets", onClick: () => setBlockViaRibbon("bullet") },
+            { kind: "action", label: "1≡", title: "Numbering", onClick: () => setBlockViaRibbon("numbered") },
+            { kind: "action", label: "⇤", title: "Decrease Indent (Shift+Tab)", onClick: () => { readSelection(); dispatch("outdentList"); editor.focus(); } },
+            { kind: "action", label: "⇥", title: "Increase Indent (Tab)", onClick: () => { readSelection(); dispatch("indentList"); editor.focus(); } },
+            { kind: "ph", label: "≡", icon: "" },
+            { kind: "ph", label: "Line Spacing" },
+            { kind: "ph", label: "Borders" },
+          ],
+        },
+        {
+          name: "Styles",
+          controls: [
+            { kind: "action", label: "Normal", big: true, icon: "¶", title: "Normal paragraph", onClick: () => setBlockViaRibbon("paragraph") },
+            { kind: "action", label: "Heading 1", big: true, icon: "H₁", title: "Heading 1", onClick: () => setBlockViaRibbon("heading1") },
+            { kind: "action", label: "Heading 2", big: true, icon: "H₂", title: "Heading 2", onClick: () => setBlockViaRibbon("heading2") },
+            { kind: "move", id: "block-type" },
+          ],
+        },
+        {
+          name: "Editing",
+          controls: [
+            { kind: "action", label: "Find &\nReplace", big: true, icon: "🔍", title: "Find & Replace (Ctrl/Cmd-F)", onClick: () => openFindBar() },
+            { kind: "ph", label: "Select", icon: "⬚" },
+          ],
+        },
+      ],
+    },
+    {
+      name: "Insert",
+      groups: [
+        { name: "Pages", controls: [{ kind: "ph", label: "Cover Page", big: true, icon: "📄" }, { kind: "ph", label: "Page Break" }] },
+        { name: "Tables", controls: [{ kind: "move", id: "btn-table", label: "Table", icon: "⊞", big: true, title: "Insert 3×3 table" }] },
+        {
+          name: "Illustrations",
+          controls: [
+            { kind: "ph", label: "Pictures", big: true, icon: "🖼" },
+            { kind: "ph", label: "Shapes", icon: "⬠" },
+            { kind: "ph", label: "Icons", icon: "☆" },
+            { kind: "ph", label: "Chart", icon: "📊" },
+          ],
+        },
+        { name: "Links", controls: [{ kind: "ph", label: "Link", big: true, icon: "🔗" }, { kind: "ph", label: "Bookmark" }] },
+        { name: "Header & Footer", controls: [{ kind: "ph", label: "Header" }, { kind: "ph", label: "Footer" }, { kind: "ph", label: "Page Number" }] },
+        { name: "Symbols", controls: [{ kind: "ph", label: "Equation", icon: "π" }, { kind: "ph", label: "Symbol", icon: "Ω" }] },
+      ],
+    },
+    {
+      name: "Review",
+      groups: [
+        { name: "Proofing", controls: [{ kind: "ph", label: "Spelling &\nGrammar", big: true, icon: "✓" }, { kind: "ph", label: "Word Count" }] },
+        { name: "Comments", controls: [{ kind: "ph", label: "New\nComment", big: true, icon: "💬" }] },
+        {
+          name: "Tracking",
+          controls: [
+            { kind: "move", id: "btn-revisions", label: "Revisions", icon: "⧗", big: true, title: "Revisions: save, compare, restore" },
+            { kind: "ph", label: "Track Changes", icon: "📝" },
+          ],
+        },
+      ],
+    },
+    {
+      name: "File",
+      groups: [
+        {
+          name: "Document",
+          controls: [
+            { kind: "move", id: "btn-new", label: "New", icon: "🗎", big: true },
+            { kind: "move", id: "btn-open", label: "Open", icon: "📂", big: true },
+            { kind: "move", id: "doc-list" },
+            { kind: "move", id: "btn-delete", label: "Delete" },
+          ],
+        },
+        {
+          name: "Export",
+          controls: [
+            { kind: "move", id: "btn-export-docx", label: "Word\n(.docx)", icon: "⬇", big: true },
+            { kind: "move", id: "btn-export-pdf", label: "PDF", icon: "⬇", big: true },
+            { kind: "move", id: "btn-export-md", label: "Markdown" },
+            { kind: "move", id: "btn-export-html", label: "HTML" },
+            { kind: "move", id: "btn-export-json", label: "JSON" },
+          ],
+        },
+      ],
+    },
+  ],
+  ["btn-undo", "btn-redo"]
+);

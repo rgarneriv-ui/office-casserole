@@ -575,3 +575,127 @@ buildGrid();
 restore();
 refreshValues();
 formulaEl.focus();
+
+// ---------- ribbon (WO-39) ----------
+import { buildRibbon } from "../../shared/ribbon";
+
+/** Clipboard buttons reuse the real keyboard path on the formula bar. */
+function sendClipKey(key: string): void {
+  formulaEl.dispatchEvent(
+    new KeyboardEvent("keydown", { key, ctrlKey: true, bubbles: true, cancelable: true })
+  );
+}
+
+buildRibbon(
+  document.getElementById("ribbon") as HTMLElement,
+  [
+    {
+      name: "Home",
+      groups: [
+        {
+          name: "Clipboard",
+          controls: [
+            { kind: "action", label: "Paste", icon: "📋", big: true, title: "Paste (Ctrl/Cmd-V)", onClick: () => sendClipKey("v") },
+            { kind: "action", label: "Cut", icon: "✂", title: "Cut (Ctrl/Cmd-X)", onClick: () => sendClipKey("x") },
+            { kind: "action", label: "Copy", icon: "⿻", title: "Copy (Ctrl/Cmd-C)", onClick: () => sendClipKey("c") },
+            { kind: "ph", label: "Format Painter", icon: "🖌" },
+          ],
+        },
+        {
+          name: "Font",
+          controls: [
+            { kind: "ph", label: "Calibri" },
+            { kind: "ph", label: "11" },
+            { kind: "move", id: "btn-bold" },
+            { kind: "ph", label: "I" },
+            { kind: "ph", label: "U" },
+            { kind: "ph", label: "Borders", icon: "⊞" },
+            { kind: "ph", label: "Fill Color", icon: "🪣" },
+            { kind: "ph", label: "Font Color", icon: "A" },
+          ],
+        },
+        {
+          name: "Alignment",
+          controls: [
+            { kind: "move", id: "fmt-align" },
+            { kind: "ph", label: "Wrap Text" },
+            { kind: "ph", label: "Merge & Center" },
+          ],
+        },
+        {
+          name: "Number",
+          controls: [
+            { kind: "move", id: "fmt-num" },
+            { kind: "ph", label: ",", icon: "" },
+            { kind: "ph", label: ".00→.0" },
+            { kind: "ph", label: ".0→.00" },
+          ],
+        },
+        {
+          name: "Cells",
+          controls: [
+            { kind: "ph", label: "Insert", icon: "⊕" },
+            { kind: "ph", label: "Delete", icon: "⊖" },
+            { kind: "ph", label: "Format", icon: "▤" },
+          ],
+        },
+        {
+          name: "Editing",
+          controls: [
+            { kind: "action", label: "AutoSum", icon: "Σ", title: "Start a =SUM( formula in the formula bar", onClick: () => {
+              formulaEl.value = "=SUM(";
+              formulaEl.dispatchEvent(new Event("input", { bubbles: true }));
+              formulaEl.focus();
+            } },
+            { kind: "move", id: "btn-clear", label: "Clear" },
+            { kind: "ph", label: "Sort & Filter", icon: "⇅" },
+            { kind: "ph", label: "Find & Select", icon: "🔍" },
+          ],
+        },
+      ],
+    },
+    {
+      name: "Insert",
+      groups: [
+        { name: "Tables", controls: [{ kind: "ph", label: "PivotTable", big: true, icon: "▦" }, { kind: "ph", label: "Table", big: true, icon: "⊞" }] },
+        { name: "Charts", controls: [{ kind: "ph", label: "Recommended\nCharts", big: true, icon: "📊" }, { kind: "ph", label: "Column" }, { kind: "ph", label: "Line" }, { kind: "ph", label: "Pie" }] },
+        { name: "Sparklines", controls: [{ kind: "ph", label: "Line" }, { kind: "ph", label: "Column" }] },
+      ],
+    },
+    {
+      name: "Formulas",
+      groups: [
+        {
+          name: "Function Library",
+          controls: [
+            { kind: "action", label: "Insert\nFunction", big: true, icon: "ƒx", title: "Start a formula in the formula bar", onClick: () => {
+              formulaEl.value = "=";
+              formulaEl.dispatchEvent(new Event("input", { bubbles: true }));
+              formulaEl.focus();
+            } },
+            { kind: "ph", label: "Financial" },
+            { kind: "ph", label: "Logical" },
+            { kind: "ph", label: "Text" },
+            { kind: "ph", label: "Date & Time" },
+            { kind: "ph", label: "Lookup" },
+          ],
+        },
+        { name: "Calculation", controls: [{ kind: "ph", label: "Calculate Now" }] },
+      ],
+    },
+    {
+      name: "File",
+      groups: [
+        { name: "Workbook", controls: [{ kind: "move", id: "btn-open", label: "Open", icon: "📂", big: true }] },
+        {
+          name: "Export",
+          controls: [
+            { kind: "move", id: "btn-export-xlsx", label: "Excel\n(.xlsx)", icon: "⬇", big: true },
+            { kind: "move", id: "btn-export-csv", label: "CSV", icon: "⬇", big: true },
+          ],
+        },
+      ],
+    },
+  ],
+  []
+);

@@ -147,3 +147,20 @@ console.log("SMOKE OK — row heights");
   assert(!doc.getElementById("addr").textContent.includes("areas"), "plain click resets areas");
 }
 console.log("SMOKE OK — multi-area selection");
+
+// ribbon: tabs, re-homed controls, working Copy button via ribbon
+{
+  const tabs = [...doc.querySelectorAll("#ribbon .rb-tab")].map((t) => t.textContent);
+  assert(JSON.stringify(tabs) === JSON.stringify(["Home", "Insert", "Formulas", "File"]), `Sheets tabs: ${tabs}`);
+  assert(doc.querySelector("#ribbon #btn-bold") && doc.querySelector("#ribbon #fmt-num"), "controls re-homed");
+  const ph = doc.querySelector("#ribbon [data-ph]");
+  assert(ph && ph.disabled, "placeholders disabled");
+  // working ribbon Copy: select a cell with content, click Copy, status shows Copied
+  const td = (a) => doc.querySelector(`td[data-addr="${a}"]`);
+  td("A2").dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true, cancelable: true }));
+  doc.dispatchEvent(new dom.window.MouseEvent("pointerup", { bubbles: true }));
+  const copyBtn = [...doc.querySelectorAll("#ribbon button")].find((b) => b.title.startsWith("Copy"));
+  copyBtn.click();
+  assert(doc.getElementById("status").textContent.includes("Copied"), "ribbon Copy drives the real clipboard path");
+}
+console.log("SMOKE OK — Sheets ribbon");

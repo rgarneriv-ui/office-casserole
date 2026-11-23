@@ -622,3 +622,92 @@ document.getElementById("btn-export-pptx")?.addEventListener("click", async () =
 restore();
 render();
 window.addEventListener("resize", render);
+
+// ---------- ribbon (WO-39) ----------
+import { buildRibbon } from "../../shared/ribbon";
+
+buildRibbon(
+  document.getElementById("ribbon") as HTMLElement,
+  [
+    {
+      name: "Home",
+      groups: [
+        { name: "Clipboard", controls: [
+          { kind: "ph", label: "Paste", icon: "📋", big: true },
+          { kind: "ph", label: "Cut", icon: "✂" },
+          { kind: "ph", label: "Copy", icon: "⿻" },
+        ] },
+        {
+          name: "Slides",
+          controls: [
+            { kind: "move", id: "btn-add-slide", label: "New\nSlide", icon: "🗂", big: true },
+            { kind: "move", id: "btn-dup-slide", label: "Duplicate" },
+            { kind: "move", id: "btn-del-slide", label: "Delete Slide" },
+            { kind: "ph", label: "Layout", icon: "▤" },
+          ],
+        },
+        { name: "Font", controls: [
+          { kind: "ph", label: "Calibri" },
+          { kind: "ph", label: "B" },
+          { kind: "ph", label: "I" },
+          { kind: "ph", label: "U" },
+        ] },
+        {
+          name: "Drawing",
+          controls: [
+            { kind: "move", id: "btn-add-text", label: "Text\nBox", icon: "🅰", big: true },
+            { kind: "move", id: "btn-add-rect", label: "Shapes", icon: "⬠", big: true },
+            { kind: "move", id: "btn-add-line", label: "Line", icon: "╱", big: true },
+            { kind: "ph", label: "Arrange", icon: "⧉" },
+            { kind: "ph", label: "Quick Styles" },
+          ],
+        },
+        { name: "Editing", controls: [
+          { kind: "move", id: "btn-del-el", label: "Delete" },
+          { kind: "ph", label: "Find", icon: "🔍" },
+          { kind: "ph", label: "Replace" },
+        ] },
+      ],
+    },
+    {
+      name: "Insert",
+      groups: [
+        { name: "Images", controls: [{ kind: "move", id: "btn-add-image", label: "Pictures", icon: "🖼", big: true }] },
+        { name: "Illustrations", controls: [
+          { kind: "ph", label: "Icons", icon: "☆" },
+          { kind: "ph", label: "SmartArt" },
+          { kind: "ph", label: "Chart", icon: "📊" },
+        ] },
+        { name: "Media", controls: [{ kind: "ph", label: "Video", icon: "🎞" }, { kind: "ph", label: "Audio", icon: "🔊" }] },
+        { name: "Text", controls: [{ kind: "ph", label: "Header &\nFooter", big: true, icon: "▭" }, { kind: "ph", label: "WordArt" }] },
+      ],
+    },
+    {
+      name: "Slide Show",
+      groups: [
+        {
+          name: "Start Slide Show",
+          controls: [
+            { kind: "move", id: "btn-present", label: "From\nBeginning", icon: "▶", big: true },
+            { kind: "ph", label: "From Current\nSlide", big: true, icon: "▷" },
+            { kind: "ph", label: "Rehearse Timings" },
+          ],
+        },
+      ],
+    },
+    {
+      name: "File",
+      groups: [
+        { name: "Deck", controls: [{ kind: "move", id: "btn-open", label: "Open", icon: "📂", big: true }] },
+        {
+          name: "Export",
+          controls: [
+            { kind: "move", id: "btn-export-pptx", label: "PowerPoint\n(.pptx)", icon: "⬇", big: true },
+            { kind: "move", id: "btn-export-json", label: "JSON", icon: "⬇", big: true },
+          ],
+        },
+      ],
+    },
+  ],
+  ["btn-undo", "btn-redo"]
+);

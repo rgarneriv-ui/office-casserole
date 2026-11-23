@@ -61,3 +61,16 @@ console.log("SMOKE OK — slides boot, add/undo, autosave, present");
   assert(arrow, "arrowhead marker rendered (line added with arrow)");
 }
 console.log("SMOKE OK — line element add/props");
+
+// ribbon: tabs, re-homed controls, New Slide works from the ribbon
+{
+  const tabs = [...doc.querySelectorAll("#ribbon .rb-tab")].map((t) => t.textContent);
+  assert(JSON.stringify(tabs) === JSON.stringify(["Home", "Insert", "Slide Show", "File"]), `Slides tabs: ${tabs}`);
+  assert(doc.querySelector("#ribbon #btn-add-slide") && doc.querySelector("#ribbon #btn-present"), "controls re-homed");
+  const thumbsBefore = doc.querySelectorAll("#thumbs .thumb").length;
+  doc.getElementById("btn-add-slide").click();
+  assert(doc.querySelectorAll("#thumbs .thumb").length === thumbsBefore + 1, "New Slide works from the ribbon");
+  const ph = doc.querySelector("#ribbon [data-ph]");
+  assert(ph && ph.disabled && ph.title.includes("not yet implemented"), "placeholders honest");
+}
+console.log("SMOKE OK — Slides ribbon");
