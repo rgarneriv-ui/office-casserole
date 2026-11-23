@@ -70,3 +70,27 @@ test("cross-block delete shows removed blocks without disturbing the rest", () =
   assert.equal(s.removed, 1);
   assert.equal(entries.find((e) => e.kind === "unchanged" && e.a === 0)?.b, 0);
 });
+
+// ---------- word-level diff (WO-31) ----------
+import { diffBlockText } from "../src/diff";
+
+test("diffBlockText: word-level ins/del with merged segments", () => {
+  const segs = diffBlockText(
+    "The quick brown fox jumps over the dog.",
+    "The quick red fox leaps over the lazy dog."
+  );
+  const by = (k: string) => segs.filter((s) => s.kind === k).map((s) => s.text.trim()).join("|");
+  assert.equal(by("del"), "brown|jumps");
+  assert.equal(by("ins"), "red|leaps|lazy");
+  // reconstructions: same+del = old, same+ins = new
+  assert.equal(segs.filter((s) => s.kind !== "ins").map((s) => s.text).join(""), "The quick brown fox jumps over the dog.");
+  assert.equal(segs.filter((s) => s.kind !== "del").map((s) => s.text).join(""), "The quick red fox leaps over the lazy dog.");
+});
+
+test("diffBlockText: edge cases — empty sides and total replacement", () => {
+  assert.deepEqual(diffBlockText("", "new text"), [{ kind: "ins", text: "new text" }]);
+  assert.deepEqual(diffBlockText("old", ""), [{ kind: "del", text: "old" }]);
+  const segs = diffBlockText("alpha beta", "gamma delta");
+  assert.ok(segs.every((s) => s.kind !== "same" || /^\s+$/.test(s.text)));
+  assert.deepEqual(diffBlockText("", ""), []);
+});

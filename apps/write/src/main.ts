@@ -45,7 +45,7 @@ import {
 } from "../../../engines/document-model/src/index";
 
 import { DocumentStore, StoredRevision, newDocId, openBestStore } from "./store";
-import { diffModels, diffSummary } from "../../../engines/document-model/src/diff";
+import { diffBlockText, diffModels, diffSummary } from "../../../engines/document-model/src/diff";
 import { BULLET_GLYPHS, ListCounter } from "../../../engines/document-model/src/listmarks";
 import { DocumentJournal, OpTransaction } from "../../../engines/document-model/src/journal";
 import { PrimOp } from "../../../engines/document-model/src/oplog";
@@ -959,12 +959,23 @@ function compareRevision(revId: string): void {
         if (e.kind === "removed") {
           return `<div class="d-del">− ${escapeHtmlText(blockText(revModel.blocks[e.a!]!) || "(empty block)")}</div>`;
         }
-        const kind = e.textChanged ? "text" : "formatting only";
-        return (
-          `<div class="d-chg">~ (${kind})<br>` +
-          `<span class="d-old">${escapeHtmlText(blockText(revModel.blocks[e.a!]!))}</span><br>` +
-          `<span class="d-new">${escapeHtmlText(blockText(model.blocks[e.b!]!))}</span></div>`
-        );
+        if (!e.textChanged) {
+          return (
+            `<div class="d-chg">~ (formatting only) ` +
+            `${escapeHtmlText(blockText(model.blocks[e.b!]!))}</div>`
+          );
+        }
+        // word-level inline diff for text changes
+        const segs = diffBlockText(blockText(revModel.blocks[e.a!]!), blockText(model.blocks[e.b!]!));
+        const inline = segs
+          .map((seg) => {
+            const t = escapeHtmlText(seg.text);
+            if (seg.kind === "del") return `<span class="d-old">${t}</span>`;
+            if (seg.kind === "ins") return `<span class="d-new">${t}</span>`;
+            return t;
+          })
+          .join("");
+        return `<div class="d-chg">~ ${inline}</div>`;
       });
     target.innerHTML =
       `<div class="d-sum">${s.changed} changed · ${s.added} added · ${s.removed} removed · ${s.unchanged} unchanged</div>` +
