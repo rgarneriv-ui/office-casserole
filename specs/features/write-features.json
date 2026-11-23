@@ -996,5 +996,37 @@
     "verification": "jsdom smoke; not independently reviewed",
     "baseline": "Word editing conveniences (subset)",
     "offlineSupport": true
+  },
+  {
+    "id": "WRITE-IMAGES-001",
+    "name": "Inline pictures",
+    "application": "write",
+    "description": "Images are inline runs: one U+FFFC object character carrying a data URL + point dimensions, so insert/delete/undo/journal/OT all ride the existing replace-runs machinery with zero new primitives. Insert > Pictures picks a file (scaled to <=400pt wide). DOCX embeds real media parts + wp:inline drawings and imports them back (dimensions in EMU); HTML <img>; Markdown data-URL image with a size warning; PDF renders an [image] placeholder with a warning.",
+    "status": "tested",
+    "owner": "ai",
+    "priority": "P1",
+    "dependencies": [],
+    "commands": [
+      "insertImage"
+    ],
+    "acceptance": [
+      "DOCX round-trip keeps the image bytes and 120x80pt dimensions",
+      "python-docx reads 1 inline shape at exact EMU",
+      "image run renders <img> at 96dpi-converted px",
+      "deleting the object char deletes the image"
+    ],
+    "edgeCases": [
+      "unembeddable data URLs drop with a warning",
+      "drawings without a resolvable blip still preserve-until-touched"
+    ],
+    "knownLimitations": [
+      "no resize UI (dimensions fixed at insert)",
+      "no text wrap modes (inline only)",
+      "PDF embedding not yet implemented"
+    ],
+    "evidence": "docx image round-trip test; python-docx cross-validation; smoke scenario 11",
+    "verification": "unit + independent python-docx parse + jsdom smoke; not independently reviewed",
+    "baseline": "Word inline pictures (subset)",
+    "offlineSupport": true
   }
 ]

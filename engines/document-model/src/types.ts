@@ -20,6 +20,11 @@ export interface RunProps {
   font?: string;
   /** hyperlink target URL */
   link?: string;
+  /** inline image: a data: URL; the run's text is one U+FFFC object char */
+  image?: string;
+  /** display width/height in points */
+  imageW?: number;
+  imageH?: number;
 }
 
 /** A contiguous span of text with a uniform mark set and character props. */

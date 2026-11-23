@@ -409,3 +409,29 @@ test("docx: size/color/highlight/font/link and align/spacing/pageBreak round-tri
   assert.equal(back.model.blocks[1]!.pageBreakBefore, true);
   assert.ok(back.report.warnings.every((w) => w.code !== "DOCX-PRESERVED"), "links are modeled now, not preserved-as-foreign");
 });
+
+// ---------- inline images (WO-42D) ----------
+const PNG_1PX =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+test("docx: inline images embed as drawings and round-trip with dimensions", async () => {
+  const model = sample();
+  model.blocks[0]!.runs = [
+    { text: "Before ", marks: [] },
+    { text: "￼", marks: [], image: `data:image/png;base64,${PNG_1PX}`, imageW: 120, imageH: 80 },
+    { text: " after", marks: [] },
+  ];
+  const out = await exportDocx(model);
+  const entries = await zipRead(out.bytes);
+  assert.ok(entries.some((e) => e.name === "word/media/image1.png"), "media part written");
+  const docXml = new TextDecoder().decode(entries.find((e) => e.name === "word/document.xml")!.data);
+  assert.ok(docXml.includes("wp:inline") && docXml.includes("pic:pic"), "drawing XML emitted");
+  const back = await importDocx(out.bytes, parseXml, serializeXml);
+  const img = back.model.blocks[0]!.runs.find((r) => r.image);
+  assert.ok(img, "image run imported back");
+  assert.equal(img!.imageW, 120);
+  assert.equal(img!.imageH, 80);
+  assert.ok(img!.image!.startsWith("data:image/png;base64,"), "data URL rebuilt");
+  const texts = back.model.blocks[0]!.runs.map((r) => r.text).join("");
+  assert.ok(texts.includes("Before") && texts.includes("after"), "surrounding text intact");
+});

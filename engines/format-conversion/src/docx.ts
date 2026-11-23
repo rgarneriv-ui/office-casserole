@@ -55,6 +55,61 @@ function runXml(run: TextRun): string {
   return `<w:r>${rPr}<w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r>`;
 }
 
+const DATA_URL_RE = /^data:image\/(png|jpeg|jpg|gif);base64,(.+)$/;
+
+function decodeBase64(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+
+function encodeBase64(data: Uint8Array): string {
+  let bin = "";
+  for (let i = 0; i < data.length; i++) bin += String.fromCharCode(data[i]!);
+  return btoa(bin);
+}
+
+export interface MediaOut {
+  parts: { name: string; ext: string; data: Uint8Array }[];
+  rels: { id: string; target: string }[];
+}
+
+const EMU_PER_PT = 12700;
+
+function drawingXml(run: TextRun, media: MediaOut, warnings: LossWarning[], blockIndex: number): string {
+  const m = DATA_URL_RE.exec(run.image ?? "");
+  if (!m) {
+    warnings.push({
+      code: "DOCX-IMAGE-UNEMBEDDABLE",
+      message: "An image was not a supported data URL (png/jpeg/gif) and was dropped.",
+      blockIndex,
+    });
+    return "";
+  }
+  const ext = m[1] === "jpg" ? "jpeg" : m[1]!;
+  const name = `word/media/image${media.parts.length + 1}.${ext}`;
+  media.parts.push({ name, ext, data: decodeBase64(m[2]!) });
+  const relId = `rIdImg${media.rels.length + 1}`;
+  media.rels.push({ id: relId, target: `media/${name.split("/").pop()}` });
+  const cx = Math.round((run.imageW ?? 300) * EMU_PER_PT);
+  const cy = Math.round((run.imageH ?? 200) * EMU_PER_PT);
+  const n = media.parts.length;
+  return (
+    `<w:r><w:drawing>` +
+    `<wp:inline distT="0" distB="0" distL="0" distR="0" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing">` +
+    `<wp:extent cx="${cx}" cy="${cy}"/><wp:docPr id="${n}" name="Picture ${n}"/>` +
+    `<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">` +
+    `<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">` +
+    `<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">` +
+    `<pic:nvPicPr><pic:cNvPr id="${n}" name="Picture ${n}"/><pic:cNvPicPr/></pic:nvPicPr>` +
+    `<pic:blipFill><a:blip r:embed="${relId}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>` +
+    `<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>` +
+    `<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>` +
+    `</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>`
+  );
+}
+
 const HIGHLIGHT_NAMES = new Set([
   "yellow", "green", "cyan", "magenta", "red", "blue", "darkYellow", "lightGray",
 ]);
@@ -64,7 +119,7 @@ export interface LinkRel {
   target: string;
 }
 
-function paragraphXml(block: Block, links?: LinkRel[]): string {
+function paragraphXml(block: Block, links?: LinkRel[], media?: MediaOut, warnings?: LossWarning[], blockIndex = 0): string {
   const styleId = STYLE_ID[block.type];
   const numId = NUM_ID[block.type];
   const props: string[] = [];
@@ -82,6 +137,7 @@ function paragraphXml(block: Block, links?: LinkRel[]): string {
   const pPr = props.length ? `<w:pPr>${props.join("")}</w:pPr>` : "";
   const runs = block.runs
     .map((r) => {
+      if (r.image && media && warnings) return drawingXml(r, media, warnings, blockIndex);
       const xml = runXml(r);
       if (r.link && links) {
         const existing = links.find((l) => l.target === r.link);
@@ -170,7 +226,7 @@ function tableXml(table: string[][], style: import("../../document-model/src/typ
 
 const R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
 
-function documentXml(model: DocModel, warnings: LossWarning[], links: LinkRel[]): string {
+function documentXml(model: DocModel, warnings: LossWarning[], links: LinkRel[], media: MediaOut): string {
   return (
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
     `<w:document xmlns:w="${W_NS}" xmlns:r="${R_NS}"><w:body>` +
@@ -186,7 +242,7 @@ function documentXml(model: DocModel, warnings: LossWarning[], links: LinkRel[])
             blockIndex: bi,
           });
         }
-        return b.type === "table" && b.table ? tableXml(b.table, b.tableStyle) : paragraphXml(b, links);
+        return b.type === "table" && b.table ? tableXml(b.table, b.tableStyle) : paragraphXml(b, links, media, warnings, bi);
       })
       .join("") +
     `<w:sectPr/></w:body></w:document>`
@@ -284,8 +340,24 @@ export async function exportDocx(
 
   const warnings: LossWarning[] = [];
   const links: LinkRel[] = [];
-  const docXmlStr = documentXml(model, warnings, links);
+  const media: MediaOut = { parts: [], rels: [] };
+  const docXmlStr = documentXml(model, warnings, links, media);
   let docRelsFinal = docRels;
+  for (const r of media.rels) {
+    docRelsFinal = docRelsFinal.replace(
+      "</Relationships>",
+      `<Relationship Id="${r.id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${r.target}"/></Relationships>`
+    );
+  }
+  let contentTypesFinal = contentTypes;
+  for (const ext of new Set(media.parts.map((p) => p.ext))) {
+    if (!contentTypesFinal.includes(`Extension="${ext}"`)) {
+      contentTypesFinal = contentTypesFinal.replace(
+        "</Types>",
+        `<Default Extension="${ext}" ContentType="image/${ext}"/></Types>`
+      );
+    }
+  }
   for (const l of links) {
     docRelsFinal = docRelsFinal.replace(
       "</Relationships>",
@@ -293,12 +365,13 @@ export async function exportDocx(
     );
   }
   const entries: ZipEntry[] = [
-    { name: "[Content_Types].xml", data: textEncoder.encode(contentTypes) },
+    { name: "[Content_Types].xml", data: textEncoder.encode(contentTypesFinal) },
     { name: "_rels/.rels", data: textEncoder.encode(ROOT_RELS) },
     { name: "word/document.xml", data: textEncoder.encode(docXmlStr) },
     { name: "word/_rels/document.xml.rels", data: textEncoder.encode(docRelsFinal) },
     { name: "word/styles.xml", data: styles ? styles.data : textEncoder.encode(stylesXml()) },
     { name: "word/numbering.xml", data: textEncoder.encode(NUMBERING_XML) },
+    ...media.parts.map((p) => ({ name: p.name, data: p.data })),
   ];
   const emitted = new Set(entries.map((e) => e.name));
   for (const part of preserved) {
@@ -397,19 +470,44 @@ export async function importDocx(
     .filter((e) => !OWNED_PARTS.has(e.name))
     .map((e) => ({ name: e.name, data: e.data }));
 
-  // hyperlink targets: rId -> external URL
+  // rel targets: rId -> external URL (hyperlinks) / rId -> part target (images)
   const linkTargets = new Map<string, string>();
+  const imageTargets = new Map<string, string>();
   const relsEntry = entries.find((e) => e.name === "word/_rels/document.xml.rels");
   if (relsEntry) {
     const relsDom = parseXml(textDecoder.decode(relsEntry.data));
     for (const rel of Array.from(relsDom.getElementsByTagName("Relationship"))) {
-      if ((rel.getAttribute("Type") ?? "").endsWith("/hyperlink")) {
-        const id = rel.getAttribute("Id");
-        const target = rel.getAttribute("Target");
-        if (id && target) linkTargets.set(id, target);
-      }
+      const id = rel.getAttribute("Id");
+      const target = rel.getAttribute("Target");
+      const type = rel.getAttribute("Type") ?? "";
+      if (!id || !target) continue;
+      if (type.endsWith("/hyperlink")) linkTargets.set(id, target);
+      else if (type.endsWith("/image")) imageTargets.set(id, target.replace(/^\.\.\//, "word/").replace(/^(?!word\/)/, "word/"));
     }
   }
+  const partBytes = new Map(entries.map((e) => [e.name, e.data]));
+  const MIME_BY_EXT: Record<string, string> = { png: "image/png", jpeg: "image/jpeg", jpg: "image/jpeg", gif: "image/gif" };
+  const imageRunFor = (drawing: Element): TextRun | null => {
+    const blip = descendantsByLocalName(drawing, "blip")[0];
+    const rid = blip?.getAttribute("r:embed") ?? (blip ? blip.getAttributeNS(R_NS, "embed") : null);
+    const target = rid ? imageTargets.get(rid) : null;
+    const data = target ? partBytes.get(target) : undefined;
+    if (!data) return null;
+    const ext = (target!.split(".").pop() ?? "png").toLowerCase();
+    const mime = MIME_BY_EXT[ext];
+    if (!mime) return null;
+    const extent = descendantsByLocalName(drawing, "extent")[0];
+    const run: TextRun = {
+      text: "\uFFFC",
+      marks: [],
+      image: `data:${mime};base64,${encodeBase64(data)}`,
+    };
+    const cx = Number(extent?.getAttribute("cx"));
+    const cy = Number(extent?.getAttribute("cy"));
+    if (Number.isFinite(cx) && cx > 0) run.imageW = Math.round(cx / EMU_PER_PT);
+    if (Number.isFinite(cy) && cy > 0) run.imageH = Math.round(cy / EMU_PER_PT);
+    return run;
+  };
 
   const dom = parseXml(textDecoder.decode(docEntry.data));
   const body = dom.getElementsByTagNameNS?.(W_NS, "body")[0] ?? dom.getElementsByTagName("w:body")[0];
@@ -509,7 +607,7 @@ export async function importDocx(
       const innerPs = descendantsByLocalName(el, "p");
       if (innerPs.length === 1) {
         // single-paragraph content control: preserve the whole sdt
-        const block = importParagraph(innerPs[0]!, bi, warnings, numFmtById, undefined, linkTargets);
+        const block = importParagraph(innerPs[0]!, bi, warnings, numFmtById, undefined, linkTargets, imageRunFor);
         block.foreignDocx = { xml: serializeXml(el), hash: "" };
         block.foreignDocx.hash = hashOf(block);
         warnings.push({
@@ -525,7 +623,7 @@ export async function importDocx(
           blockIndex: bi,
         });
         for (const p2 of innerPs) {
-          model.blocks.push(importParagraph(p2, model.blocks.length, warnings, numFmtById, serializeXml, linkTargets));
+          model.blocks.push(importParagraph(p2, model.blocks.length, warnings, numFmtById, serializeXml, linkTargets, imageRunFor));
         }
       }
       continue;
@@ -538,7 +636,7 @@ export async function importDocx(
       });
       continue;
     }
-    model.blocks.push(importParagraph(el, bi, warnings, numFmtById, serializeXml, linkTargets));
+    model.blocks.push(importParagraph(el, bi, warnings, numFmtById, serializeXml, linkTargets, imageRunFor));
   }
 
   normalizeModel(model);
@@ -608,7 +706,8 @@ function importParagraph(
   warnings: LossWarning[],
   numFmtById: Map<string, string> = new Map(),
   serializeXml?: XmlSerialize,
-  linkTargets?: Map<string, string>
+  linkTargets?: Map<string, string>,
+  importImage?: (drawing: Element) => TextRun | null
 ): Block {
   let type: BlockType = "paragraph";
   let pendingIndent = 0;
@@ -685,6 +784,10 @@ function importParagraph(
           foreignKinds.add("field");
         } else if (rc.localName === "commentReference") {
           foreignKinds.add("comment anchor");
+        } else if (rc.localName === "drawing" && importImage) {
+          const imgRun = importImage(rc);
+          if (imgRun) block.runs.push(imgRun);
+          else foreignKinds.add("<drawing>");
         } else if (!SUPPORTED_R_CHILDREN.has(rc.localName)) {
           foreignKinds.add(`<${rc.localName}>`);
         }

@@ -562,3 +562,30 @@ export function setBlockAttr(
     emit(model, { t: "set-block-attr", block: b, key, before, after: normalized ?? null }, rec);
   }
 }
+
+/** Insert an inline image at a position: one U+FFFC object-char run carrying
+ *  the data URL. A single replace-runs primitive — undo/journal/OT free. */
+export function insertImage(
+  model: DocModel,
+  pos: Position,
+  dataUrl: string,
+  widthPt: number,
+  heightPt: number,
+  rec?: OpRecorder
+): Position {
+  const block = model.blocks[pos.block];
+  if (!block) throw new Error(`insertImage: no block ${pos.block}`);
+  emit(
+    model,
+    {
+      t: "replace-runs",
+      block: pos.block,
+      from: pos.offset,
+      to: pos.offset,
+      before: [],
+      after: [{ text: "\uFFFC", marks: [], image: dataUrl, imageW: widthPt, imageH: heightPt }],
+    },
+    rec
+  );
+  return { block: pos.block, offset: pos.offset + 1 };
+}

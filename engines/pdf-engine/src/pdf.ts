@@ -303,6 +303,13 @@ export function exportPdf(
       page = [];
       y = PAGE_H - MARGIN;
     }
+    if (block.runs.some((r) => r.image)) {
+      warnings.push({
+        code: "PDF-IMAGE",
+        message: "Inline images render as an [image] placeholder in PDF (not yet embedded).",
+        blockIndex: bi,
+      });
+    }
     if (block.runs.some((r) => r.size || r.color || r.highlight || r.font || r.link)) {
       warnings.push({
         code: "PDF-RUNPROPS",
@@ -319,7 +326,7 @@ export function exportPdf(
     const spans: Span[] =
       block.runs.length > 0
         ? block.runs.map((r) => ({
-            text: sanitize(r.text, warnings, bi),
+            text: r.image ? "[image]" : sanitize(r.text, warnings, bi),
             font: fontFor(r.marks, forceBold),
             underline: r.marks.includes("underline"),
             strike: r.marks.includes("strike"),

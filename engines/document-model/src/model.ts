@@ -37,7 +37,7 @@ export function docText(model: DocModel): string {
   return model.blocks.map(blockText).join("\n");
 }
 
-const RUN_PROP_KEYS = ["size", "color", "highlight", "font", "link"] as const;
+const RUN_PROP_KEYS = ["size", "color", "highlight", "font", "link", "image", "imageW", "imageH"] as const;
 
 /** Copy a run (optionally with different text), carrying marks and props. */
 export function cloneRun(run: TextRun, text: string = run.text): TextRun {

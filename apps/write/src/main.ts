@@ -36,6 +36,7 @@ import {
   mergeWithPrevious,
   newDocument,
   normRange,
+  insertImage,
   rangeHasMark,
   runPropsAt,
   setBlockAttr,
@@ -313,6 +314,11 @@ function renderBlock(block: Block, index: number): string {
   const inner =
     block.runs
       .map((run) => {
+        if (run.image) {
+          const w = run.imageW ? ` width="${Math.round(run.imageW * (96 / 72))}"` : "";
+          const h = run.imageH ? ` height="${Math.round(run.imageH * (96 / 72))}"` : "";
+          return `<span class="m-image" contenteditable="false">\uFFFC<img src="${run.image}"${w}${h} alt="" draggable="false"/></span>`;
+        }
         let cls = run.marks.map((m) => `m-${m}`).join(" ");
         if (run.link) cls = (cls ? cls + " " : "") + "m-link";
         const st: string[] = [];
@@ -774,6 +780,38 @@ document.getElementById("btn-link")?.addEventListener("click", () => {
   dispatch("insertText", sel.value);
   sel.value = "";
   editor.focus();
+});
+document.getElementById("btn-picture")?.addEventListener("click", () => {
+  (document.getElementById("picture-open") as HTMLInputElement | null)?.click();
+});
+(document.getElementById("picture-open") as HTMLInputElement | null)?.addEventListener("change", (e) => {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    const src = String(reader.result);
+    const probe = new Image();
+    probe.onload = () => {
+      // scale to at most 400pt wide, keeping aspect
+      const maxW = 400;
+      const wPt = Math.min(maxW, probe.width * 0.75);
+      const hPt = Math.round((wPt / (probe.width * 0.75)) * probe.height * 0.75);
+      log.begin(null);
+      const caret = insertImage(model, selection.focus, src, Math.round(wPt), hPt, log);
+      log.flush();
+      selection = { anchor: caret, focus: caret };
+      render();
+      scheduleSave();
+      statusEl.textContent = "Picture inserted";
+    };
+    probe.onerror = () => {
+      statusEl.textContent = "Could not read that image";
+    };
+    probe.src = src;
+  };
+  reader.readAsDataURL(file);
 });
 document.getElementById("btn-wordcount")?.addEventListener("click", () => {
   const text = model.blocks.map((b) => blockText(b)).join("\n");
@@ -1787,7 +1825,7 @@ buildRibbon(
         {
           name: "Illustrations",
           controls: [
-            { kind: "ph", label: "Pictures", big: true, icon: "🖼" },
+            { kind: "move", id: "btn-picture", label: "Pictures", big: true, icon: "🖼" },
             { kind: "ph", label: "Shapes", icon: "⬠" },
             { kind: "ph", label: "Icons", icon: "☆" },
             { kind: "ph", label: "Chart", icon: "📊" },

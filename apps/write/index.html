@@ -120,6 +120,8 @@
   .m-underline.m-strike { text-decoration: underline line-through; }
   .m-link { color: #1a56b0; text-decoration: underline; cursor: pointer; }
   .pb-before { border-top: 2px dashed #c9b87a; margin-top: 10px; padding-top: 10px; position: relative; }
+  .m-image { font-size: 0; }
+  .m-image img { max-width: 100%; vertical-align: middle; }
 </style>
 </head>
 <body>
@@ -180,6 +182,8 @@
       <button id="btn-spellcheck" title="Toggle spell checking">✓ab</button>
       <button id="btn-cut" title="Cut (Ctrl/Cmd-X)">✂</button>
       <button id="btn-copy" title="Copy (Ctrl/Cmd-C)">⿻</button>
+      <button id="btn-picture" title="Insert a picture at the caret">🖼</button>
+      <input id="picture-open" type="file" accept="image/png,image/jpeg,image/gif" style="display:none" />
       <button id="btn-table" title="Insert 3×3 table">⊞</button>
       <button id="btn-open" title="Open a .docx or .json file">Open…</button>
       <input id="file-open" type="file" accept=".docx,.json" style="display:none" />

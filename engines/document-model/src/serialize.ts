@@ -79,6 +79,10 @@ function runsHtml(block: Pick<Block, "runs">): string {
   return (
     block.runs
       .map((run) => {
+        if (run.image) {
+          const dims = `${run.imageW ? ` width="${Math.round(run.imageW * (96 / 72))}"` : ""}${run.imageH ? ` height="${Math.round(run.imageH * (96 / 72))}"` : ""}`;
+          return `<img src="${run.image}"${dims} alt=""/>`;
+        }
         let html = escapeHtml(run.text);
         if (run.marks.includes("bold")) html = `<strong>${html}</strong>`;
         if (run.marks.includes("italic")) html = `<em>${html}</em>`;
@@ -220,6 +224,14 @@ export function toMarkdown(model: DocModel): { markdown: string; report: LossRep
         if (run.marks.includes("italic")) md = `*${md}*`;
         if (run.marks.includes("strike")) md = `~~${md}~~`; // GFM strikethrough
         if (run.link) md = `[${md}](${run.link})`;
+        if (run.image) {
+          warnings.push({
+            code: "MD-IMAGE-EMBEDDED",
+            message: "Inline image exported as a data-URL Markdown image (large output).",
+            blockIndex: bi,
+          });
+          return `![image](${run.image})`;
+        }
         if (run.size || run.color || run.highlight || run.font) {
           warnings.push({
             code: "MD-RUNPROPS-LOST",
