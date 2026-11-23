@@ -22,10 +22,14 @@
 ## Consequences
 
 - Corrupt packages fail loudly (CRC/signature checks), never half-import.
-- The §5.1 "Original Format Preservation" store (round-tripping unknown parts)
-  is not yet implemented; imports are one-way into the native model and the
-  registry says so. That store is the next step for this component, before
-  tracked changes and comments.
+- §5.1 Original Format Preservation (seed, WO-32): import carries every
+  package part we don't rebuild (theme, settings, fontTable, docProps, media,
+  …); export re-emits them, keeps the SOURCE styles.xml when present (richer,
+  theme-linked), and merges the source content-types and document rels with
+  our required entries. Ours-win parts: document.xml and numbering.xml (our
+  lists reference our numIds). Preserved parts persist with the document in
+  Write. Not yet preserved: unknown constructs INSIDE document.xml (fields,
+  content controls, comments anchors) — that is the remaining §5.1 work.
 - Fixture corpus currently consists of self-generated packages and synthetic
   Word-style markup; a corpus of real Word-produced files is required before
   any status above *tested* (§22.2 differential testing).

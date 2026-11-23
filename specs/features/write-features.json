@@ -264,7 +264,7 @@
     "application": "casserole-write",
     "name": "DOCX export/import with loss reports",
     "priority": "P0",
-    "description": "Export the document as a .docx package; open .docx files mapping paragraphs, Heading1/2, bold/italic/underline; every unsupported construct is kept where possible and reported, never silently dropped.",
+    "description": "Export the document as a .docx package; open .docx files mapping paragraphs, Heading1/2, bold/italic/underline; every unsupported construct is kept where possible and reported, never silently dropped. Original Format Preservation (seed): unknown package parts survive import -> edit -> export (source styles kept; content types and rels merged), persisted with the document.",
     "baseline": {
       "product": "Microsoft Word",
       "capability": "DOCX (ECMA-376 subset)",
@@ -303,11 +303,16 @@
         "kind": "test-run",
         "ref": "engines/format-conversion/test/docx.test.ts: 7 tests pass",
         "date": "2026-11-22"
+      },
+      {
+        "kind": "test-run",
+        "ref": "OFP round-trip suite + real python-docx fixture (14 parts incl. theme/settings carried through, reopens in python-docx)",
+        "date": "2026-11-23"
       }
     ],
     "knownLimitations": [
       "Fixture corpus is self-generated + synthetic; no real-Word differential corpus yet (§22.2), so status stays below verified",
-      "No Original Format Preservation store yet: import is one-way into the native model"
+      "Unknown constructs inside document.xml (fields, content controls, comment anchors) are not yet preserved"
     ]
   },
   {
@@ -469,7 +474,7 @@
     "application": "casserole-write",
     "name": "Named revisions with compare and restore",
     "priority": "P1",
-    "description": "Save named restorable revisions with the document; block-level comparison (LCS over stable block ids) distinguishing text from formatting-only changes; restore is undoable; unreadable revisions fail safe.",
+    "description": "Save named restorable revisions with the document; block-level comparison with word-level inline ins/del inside changed blocks (LCS over stable block ids) distinguishing text from formatting-only changes; restore is undoable; unreadable revisions fail safe.",
     "baseline": {
       "product": "Microsoft Word",
       "capability": "Version history (subset)",
@@ -515,11 +520,14 @@
         "kind": "test-run",
         "ref": "smoke-write.mjs scenario 4 (save/compare/restore): pass",
         "date": "2026-11-22"
+      },
+      {
+        "kind": "test-run",
+        "ref": "diffBlockText word-LCS suites with reconstruction properties",
+        "date": "2026-11-23"
       }
     ],
-    "knownLimitations": [
-      "Block-granularity diff (no intra-block run diff yet); review branches/merge not yet built; revisions are full copies until op-log migration"
-    ]
+    "knownLimitations": []
   },
   {
     "id": "WRITE-EDIT-002",

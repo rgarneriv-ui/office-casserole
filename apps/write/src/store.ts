@@ -25,6 +25,9 @@ export interface StoredDoc extends StoredDocMeta {
   revisions?: StoredRevision[];
   /** §14.1 attributed operation journal (DocumentJournal JSON). */
   journal?: string;
+  /** §5.1 Original Format Preservation: untouched DOCX parts from the file
+   *  this document was imported from, re-emitted on DOCX export. */
+  preservedDocx?: { name: string; b64: string }[];
 }
 
 export type Durability = "durable" | "session" | "memory-only";

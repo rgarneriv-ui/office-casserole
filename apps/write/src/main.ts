@@ -50,7 +50,7 @@ import { BULLET_GLYPHS, ListCounter } from "../../../engines/document-model/src/
 import { DocumentJournal, OpTransaction } from "../../../engines/document-model/src/journal";
 import { PrimOp } from "../../../engines/document-model/src/oplog";
 import { CommandDefinition } from "../../../packages/shared-types/src/resource";
-import { exportDocx, importDocx } from "../../../engines/format-conversion/src/docx";
+import { PreservedPart, exportDocx, importDocx } from "../../../engines/format-conversion/src/docx";
 import { exportPdf } from "../../../engines/pdf-engine/src/pdf";
 
 const BLOCK_TAG: Record<string, string> = { paragraph: "p", heading1: "h1", heading2: "h2" };
@@ -114,6 +114,23 @@ function durabilityNote(): string {
 }
 
 let revisions: StoredRevision[] = [];
+let preservedDocx: PreservedPart[] = [];
+
+function b64FromBytes(data: Uint8Array): string {
+  let bin = "";
+  const CHUNK = 0x8000;
+  for (let i = 0; i < data.length; i += CHUNK) {
+    bin += String.fromCharCode(...data.subarray(i, i + CHUNK));
+  }
+  return btoa(bin);
+}
+
+function bytesFromB64(b64: string): Uint8Array {
+  const bin = atob(b64);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
 
 async function save(): Promise<void> {
   if (!store) return;
@@ -131,6 +148,9 @@ async function save(): Promise<void> {
       doc: JSON.parse(toJSON(model)),
       revisions,
       journal: journal?.toJSON(),
+      preservedDocx: preservedDocx.length
+        ? preservedDocx.map((p) => ({ name: p.name, b64: b64FromBytes(p.data) }))
+        : undefined,
     });
     dirtySinceSave = false;
     statusEl.textContent = `Saved ${new Date().toLocaleTimeString()}${durabilityNote()}`;
@@ -685,7 +705,7 @@ document.getElementById("btn-export-json")?.addEventListener("click", () => {
 });
 document.getElementById("btn-export-docx")?.addEventListener("click", async () => {
   try {
-    const { bytes, report } = await exportDocx(model);
+    const { bytes, report } = await exportDocx(model, { preserved: preservedDocx });
     if (!report.lossless) {
       const msgs = [...new Set(report.warnings.map((w) => w.message))].join("\n• ");
       if (!window.confirm(`DOCX export is not lossless:\n\n• ${msgs}\n\nExport anyway?`)) return;
@@ -761,9 +781,11 @@ function resetEditorState(
   title: string,
   id: string,
   revs: StoredRevision[] = [],
-  journalJson?: string
+  journalJson?: string,
+  preserved: PreservedPart[] = []
 ): void {
   log.clear();
+  preservedDocx = preserved;
   model = newModel;
   journal = null;
   if (journalJson) {
@@ -798,7 +820,14 @@ async function openDoc(id: string): Promise<void> {
     return;
   }
   try {
-    resetEditorState(fromJSON(JSON.stringify(stored.doc)), stored.title, stored.id, stored.revisions ?? [], stored.journal);
+    resetEditorState(
+      fromJSON(JSON.stringify(stored.doc)),
+      stored.title,
+      stored.id,
+      stored.revisions ?? [],
+      stored.journal,
+      (stored.preservedDocx ?? []).map((p) => ({ name: p.name, data: bytesFromB64(p.b64) }))
+    );
     statusEl.textContent = `Opened — last saved ${new Date(stored.updatedAt).toLocaleString()}`;
   } catch {
     statusEl.textContent = "⚠ Stored document could not be read (left untouched)";

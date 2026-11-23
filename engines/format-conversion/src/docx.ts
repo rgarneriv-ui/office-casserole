@@ -188,17 +188,68 @@ const DOC_RELS =
   `<Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>` +
   `</Relationships>`;
 
+export interface DocxExportOptions {
+  /** Parts from a previous import to carry through (§5.1). */
+  preserved?: PreservedPart[];
+}
+
+function mergeContentTypes(sourceXml: string): string {
+  let xml = sourceXml;
+  const ensure = (needle: string, insert: string) => {
+    if (!xml.includes(needle)) xml = xml.replace("</Types>", `${insert}</Types>`);
+  };
+  ensure('Extension="rels"', `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>`);
+  ensure('Extension="xml"', `<Default Extension="xml" ContentType="application/xml"/>`);
+  ensure('PartName="/word/document.xml"', `<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>`);
+  ensure('PartName="/word/numbering.xml"', `<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>`);
+  ensure('PartName="/word/styles.xml"', `<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>`);
+  return xml;
+}
+
+function mergeDocRels(sourceXml: string): string {
+  let xml = sourceXml;
+  const ensure = (target: string, type: string, id: string) => {
+    if (!xml.includes(`Target="${target}"`)) {
+      xml = xml.replace(
+        "</Relationships>",
+        `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${target}"/></Relationships>`
+      );
+    }
+  };
+  ensure("styles.xml", "styles", "rIdCasStyles");
+  ensure("numbering.xml", "numbering", "rIdCasNumbering");
+  return xml;
+}
+
 export async function exportDocx(
-  model: DocModel
+  model: DocModel,
+  options: DocxExportOptions = {}
 ): Promise<{ bytes: Uint8Array; report: LossReport }> {
+  const preserved = options.preserved ?? [];
+  const byName = new Map(preserved.map((p) => [p.name, p]));
+
+  // manifests: merge against the source's when present, else ours
+  const ctSource = byName.get("[Content_Types].xml");
+  const contentTypes = ctSource ? mergeContentTypes(textDecoder.decode(ctSource.data)) : CONTENT_TYPES;
+  const relsSource = byName.get("word/_rels/document.xml.rels");
+  const docRels = relsSource ? mergeDocRels(textDecoder.decode(relsSource.data)) : DOC_RELS;
+  // source styles win (richer theme-linked definitions); ours is the fallback
+  const styles = byName.get("word/styles.xml");
+
   const entries: ZipEntry[] = [
-    { name: "[Content_Types].xml", data: textEncoder.encode(CONTENT_TYPES) },
+    { name: "[Content_Types].xml", data: textEncoder.encode(contentTypes) },
     { name: "_rels/.rels", data: textEncoder.encode(ROOT_RELS) },
     { name: "word/document.xml", data: textEncoder.encode(documentXml(model)) },
-    { name: "word/_rels/document.xml.rels", data: textEncoder.encode(DOC_RELS) },
-    { name: "word/styles.xml", data: textEncoder.encode(stylesXml()) },
+    { name: "word/_rels/document.xml.rels", data: textEncoder.encode(docRels) },
+    { name: "word/styles.xml", data: styles ? styles.data : textEncoder.encode(stylesXml()) },
     { name: "word/numbering.xml", data: textEncoder.encode(NUMBERING_XML) },
   ];
+  const emitted = new Set(entries.map((e) => e.name));
+  for (const part of preserved) {
+    if (emitted.has(part.name) || OWNED_PARTS.has(part.name) || MERGED_PARTS.has(part.name)) continue;
+    entries.push({ name: part.name, data: part.data });
+    emitted.add(part.name);
+  }
   const bytes = await zipWrite(entries);
   // The v0 model subset is fully representable in WordprocessingML.
   return { bytes, report: { format: "docx", lossless: true, warnings: [] } };
@@ -207,6 +258,23 @@ export async function exportDocx(
 // ---------- import ----------
 
 export type XmlParse = (xml: string) => Document;
+
+/** An untouched package part carried through import → export (§5.1 Original
+ *  Format Preservation). Parts we rebuild (document.xml, numbering.xml, the
+ *  relationship/content-type manifests we merge) are never preserved as-is. */
+export interface PreservedPart {
+  name: string;
+  data: Uint8Array;
+}
+
+/** Parts the Casserole exporter owns outright — source versions are dropped. */
+const OWNED_PARTS = new Set([
+  "word/document.xml",
+  "word/numbering.xml",
+  "_rels/.rels",
+]);
+/** Parts handled by merge logic rather than byte-preservation. */
+const MERGED_PARTS = new Set(["[Content_Types].xml", "word/_rels/document.xml.rels"]);
 
 function defaultParse(xml: string): Document {
   if (typeof DOMParser === "undefined") {
@@ -256,11 +324,14 @@ const SUPPORTED_R_CHILDREN = new Set(["rPr", "t", "br", "lastRenderedPageBreak"]
 export async function importDocx(
   bytes: Uint8Array,
   parseXml: XmlParse = defaultParse
-): Promise<{ model: DocModel; report: LossReport }> {
+): Promise<{ model: DocModel; report: LossReport; preserved: PreservedPart[] }> {
   const warnings: LossWarning[] = [];
   const entries = await zipRead(bytes);
   const docEntry = entries.find((e) => e.name === "word/document.xml");
   if (!docEntry) throw new Error("Not a DOCX package: word/document.xml missing");
+  const preserved: PreservedPart[] = entries
+    .filter((e) => !OWNED_PARTS.has(e.name))
+    .map((e) => ({ name: e.name, data: e.data }));
 
   const dom = parseXml(textDecoder.decode(docEntry.data));
   const body = dom.getElementsByTagNameNS?.(W_NS, "body")[0] ?? dom.getElementsByTagName("w:body")[0];
@@ -373,6 +444,7 @@ export async function importDocx(
   return {
     model,
     report: { format: "docx", lossless: warnings.length === 0, warnings },
+    preserved,
   };
 }
 

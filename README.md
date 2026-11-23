@@ -120,8 +120,10 @@ files saved by actual Office applications are the ones that matter most.
 
 ## Next engineering tasks (dependency order)
 
-1. Grow the fixture corpus with real Word/Excel/PowerPoint files; Original
-   Format Preservation store (§5.1) for round-tripping unknown parts.
+1. Grow the fixture corpus with real Word/Excel/PowerPoint files. OFP now
+   carries unknown DOCX package parts through edit round-trips; remaining
+   §5.1 work is preserving unknown constructs inside document.xml (fields,
+   content controls, comment anchors).
 2. Relay protocol (§14.3 cursor exchange), presence, and conflict UX —
    the first work that needs a second machine. Write already records into
    an attributed DocumentJournal at runtime (undo/redo journal as inverse

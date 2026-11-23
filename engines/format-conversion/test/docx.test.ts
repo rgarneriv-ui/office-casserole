@@ -258,3 +258,58 @@ test("docx: table style (header, widths, aligns) round-trips", async () => {
   assert.deepEqual(tbl.tableStyle?.aligns, [null, "center", "right"]);
   assert.ok(tbl.tableStyle?.widths && Math.abs(tbl.tableStyle.widths[0]! / tbl.tableStyle.widths[1]! - 2) < 0.1);
 });
+
+test("docx OFP: unknown parts survive import → edit → export; manifests merged", async () => {
+  // a "foreign" package with theme, settings, custom content types + doc rels
+  const srcCT =
+    `<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">` +
+    `<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>` +
+    `<Default Extension="xml" ContentType="application/xml"/>` +
+    `<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>` +
+    `<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>` +
+    `<Override PartName="/word/theme/theme1.xml" ContentType="application/vnd.openxmlformats-officedocument.theme+xml"/>` +
+    `<Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>` +
+    `</Types>`;
+  const srcRels =
+    `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">` +
+    `<Relationship Id="r1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>` +
+    `<Relationship Id="r2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/theme" Target="theme/theme1.xml"/>` +
+    `<Relationship Id="r3" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings" Target="settings.xml"/>` +
+    `</Relationships>`;
+  const srcStyles = `<?xml version="1.0"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:styleId="SourceSpecial"/></w:styles>`;
+  const docXml =
+    `<?xml version="1.0"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>` +
+    `<w:p><w:r><w:t>Original text</w:t></w:r></w:p><w:sectPr/></w:body></w:document>`;
+  const bytes = await zipWrite([
+    { name: "[Content_Types].xml", data: new TextEncoder().encode(srcCT) },
+    { name: "_rels/.rels", data: new TextEncoder().encode(`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`) },
+    { name: "word/document.xml", data: new TextEncoder().encode(docXml) },
+    { name: "word/_rels/document.xml.rels", data: new TextEncoder().encode(srcRels) },
+    { name: "word/styles.xml", data: new TextEncoder().encode(srcStyles) },
+    { name: "word/theme/theme1.xml", data: new TextEncoder().encode("<theme>SOURCE THEME</theme>") },
+    { name: "word/settings.xml", data: new TextEncoder().encode("<settings>SOURCE SETTINGS</settings>") },
+  ]);
+
+  const { model, preserved } = await importDocx(bytes, parseXml);
+  assert.ok(preserved.some((p) => p.name === "word/theme/theme1.xml"));
+  // edit the model, then export with preservation
+  model.blocks.push(newBlock("paragraph", [{ text: "Added by Casserole", marks: [] }]));
+  const out = await exportDocx(model, { preserved });
+  const parts = await zipRead(out.bytes);
+  const get = (n: string) => parts.find((e) => e.name === n);
+  const text = (n: string) => new TextDecoder().decode(get(n)!.data);
+
+  assert.ok(text("word/theme/theme1.xml").includes("SOURCE THEME"), "theme preserved byte-for-byte");
+  assert.ok(text("word/settings.xml").includes("SOURCE SETTINGS"), "settings preserved");
+  assert.ok(text("word/styles.xml").includes("SourceSpecial"), "source styles win");
+  assert.ok(text("word/document.xml").includes("Added by Casserole"), "document rebuilt with the edit");
+  const ct = text("[Content_Types].xml");
+  assert.ok(ct.includes("/word/theme/theme1.xml"), "source CT kept");
+  assert.ok(ct.includes("/word/numbering.xml"), "our numbering override merged in");
+  const rels = text("word/_rels/document.xml.rels");
+  assert.ok(rels.includes('Target="theme/theme1.xml"'), "source rels kept");
+  assert.ok(rels.includes('Target="numbering.xml"'), "numbering rel merged in");
+  // the merged package re-imports cleanly
+  const again = await importDocx(out.bytes, parseXml);
+  assert.ok(again.model.blocks.some((b) => b.runs.some((r) => r.text === "Added by Casserole")));
+});
