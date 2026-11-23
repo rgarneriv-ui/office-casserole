@@ -8,8 +8,22 @@ export type Mark = "bold" | "italic" | "underline" | "strike";
 
 export type BlockType = "paragraph" | "heading1" | "heading2" | "bullet" | "numbered" | "table";
 
-/** A contiguous span of text with a uniform mark set. */
-export interface TextRun {
+/** Optional run-level character properties (WO-42A). All absent = default. */
+export interface RunProps {
+  /** font size in points */
+  size?: number;
+  /** text color, #rrggbb */
+  color?: string;
+  /** highlight: one of the Word highlight palette names */
+  highlight?: string;
+  /** font family name */
+  font?: string;
+  /** hyperlink target URL */
+  link?: string;
+}
+
+/** A contiguous span of text with a uniform mark set and character props. */
+export interface TextRun extends RunProps {
   text: string;
   marks: Mark[];
 }
@@ -24,10 +38,18 @@ export interface TableStyle {
   widths?: number[];
 }
 
+export type BlockAlign = "left" | "center" | "right";
+
 export interface Block {
   /** Stable identity for attribution/collaboration (ADR-0002). */
   id: string;
   type: BlockType;
+  /** paragraph alignment (absent = left) */
+  align?: BlockAlign;
+  /** line spacing multiplier (absent = 1) */
+  spacing?: number;
+  /** force a page break before this block (honored by paged exports) */
+  pageBreakBefore?: boolean;
   runs: TextRun[];
   /** List nesting level 0–3; only meaningful on bullet/numbered blocks. */
   indent?: number;

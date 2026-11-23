@@ -118,6 +118,8 @@
   header .tools { display: none; }
   .m-strike { text-decoration: line-through; }
   .m-underline.m-strike { text-decoration: underline line-through; }
+  .m-link { color: #1a56b0; text-decoration: underline; cursor: pointer; }
+  .pb-before { border-top: 2px dashed #c9b87a; margin-top: 10px; padding-top: 10px; position: relative; }
 </style>
 </head>
 <body>
@@ -139,6 +141,45 @@
       <button id="btn-italic" title="Italic (Ctrl/Cmd-I)">I</button>
       <button id="btn-underline" title="Underline (Ctrl/Cmd-U)">U</button>
       <button id="btn-strike" title="Strikethrough"><s>S</s></button>
+      <select id="font-family" title="Font family">
+        <option value="">Default font</option>
+        <option>Calibri</option><option>Arial</option><option>Georgia</option>
+        <option>Times New Roman</option><option>Courier New</option><option>Verdana</option>
+      </select>
+      <select id="font-size" title="Font size (pt)">
+        <option value="">Size</option>
+        <option>8</option><option>9</option><option>10</option><option>11</option><option>12</option>
+        <option>14</option><option>16</option><option>18</option><option>20</option><option>24</option>
+        <option>28</option><option>36</option><option>48</option><option>72</option>
+      </select>
+      <input id="font-color" type="color" value="#222222" title="Font color">
+      <select id="font-highlight" title="Text highlight">
+        <option value="">No highlight</option>
+        <option value="yellow">Yellow</option><option value="green">Green</option>
+        <option value="cyan">Cyan</option><option value="magenta">Magenta</option>
+      </select>
+      <button id="btn-align-left" title="Align left">⫷</button>
+      <button id="btn-align-center" title="Center">⫶</button>
+      <button id="btn-align-right" title="Align right">⫸</button>
+      <select id="line-spacing" title="Line spacing">
+        <option value="">Spacing</option>
+        <option value="1">1.0</option><option value="1.15">1.15</option>
+        <option value="1.5">1.5</option><option value="2">2.0</option>
+      </select>
+      <button id="btn-link" title="Insert link on the selection">🔗</button>
+      <button id="btn-pagebreak" title="Page break before this paragraph">⤓¶</button>
+      <button id="btn-coverpage" title="Insert a cover page">▣</button>
+      <select id="symbol-pick" title="Insert symbol">
+        <option value="">Symbol…</option>
+        <option>©</option><option>®</option><option>™</option><option>€</option><option>£</option>
+        <option>§</option><option>¶</option><option>±</option><option>×</option><option>÷</option>
+        <option>≈</option><option>≠</option><option>≤</option><option>≥</option><option>∞</option>
+        <option>π</option><option>Ω</option><option>∑</option><option>→</option><option>—</option>
+      </select>
+      <button id="btn-wordcount" title="Word count">Aa#</button>
+      <button id="btn-spellcheck" title="Toggle spell checking">✓ab</button>
+      <button id="btn-cut" title="Cut (Ctrl/Cmd-X)">✂</button>
+      <button id="btn-copy" title="Copy (Ctrl/Cmd-C)">⿻</button>
       <button id="btn-table" title="Insert 3×3 table">⊞</button>
       <button id="btn-open" title="Open a .docx or .json file">Open…</button>
       <input id="file-open" type="file" accept=".docx,.json" style="display:none" />

@@ -191,3 +191,71 @@ test("replace: marks carried from match start; replaceAll back-to-front; undo re
   log.redo(model);
   assert.equal(JSON.stringify(model.blocks[0]!.runs), before, "redo byte-stable");
 });
+
+// ---------- run props + block attrs (WO-42A) ----------
+import { runPropsAt, setBlockAttr, setRunProps } from "../src/operations";
+
+test("setRunProps: splits at boundaries, journaled, undo byte-stable; null clears", () => {
+  const model = fr();
+  model.blocks[0]!.runs = [{ text: "hello wide world", marks: [] }];
+  const log = new TransactionLog();
+  log.begin(null);
+  setRunProps(model, { anchor: { block: 0, offset: 6 }, focus: { block: 0, offset: 10 } }, { size: 24, color: "#ff0000" }, log);
+  log.flush();
+  assert.equal(model.blocks[0]!.runs.length, 3, "split into three runs");
+  const mid = model.blocks[0]!.runs[1]!;
+  assert.equal(mid.text, "wide");
+  assert.equal(mid.size, 24);
+  assert.equal(mid.color, "#ff0000");
+  assert.deepEqual(runPropsAt(model.blocks[0]!, 8).size, 24, "runPropsAt sees the styled run");
+  const styledJson = JSON.stringify(model.blocks[0]!.runs);
+  log.undo(model);
+  assert.equal(model.blocks[0]!.runs.length, 1, "undo restores a single plain run");
+  assert.equal(model.blocks[0]!.runs[0]!.size, undefined);
+  log.redo(model);
+  assert.equal(JSON.stringify(model.blocks[0]!.runs), styledJson, "redo byte-stable");
+  // null clears
+  log.begin(null);
+  setRunProps(model, { anchor: { block: 0, offset: 6 }, focus: { block: 0, offset: 10 } }, { size: null }, log);
+  log.flush();
+  assert.equal(model.blocks[0]!.runs.find((r) => r.text === "wide")?.size, undefined, "size cleared");
+  assert.equal(model.blocks[0]!.runs.find((r) => r.text === "wide")?.color, "#ff0000", "color kept");
+});
+
+test("setBlockAttr: align/spacing/pageBreak set + invert; defaults normalize away", () => {
+  const model = fr();
+  model.blocks[0]!.runs = [{ text: "x", marks: [] }];
+  const log = new TransactionLog();
+  log.begin(null);
+  const r = { anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 0 } };
+  setBlockAttr(model, r, "align", "center", log);
+  setBlockAttr(model, r, "spacing", 1.5, log);
+  setBlockAttr(model, r, "pageBreakBefore", true, log);
+  log.flush();
+  assert.equal(model.blocks[0]!.align, "center");
+  assert.equal(model.blocks[0]!.spacing, 1.5);
+  assert.equal(model.blocks[0]!.pageBreakBefore, true);
+  log.undo(model);
+  assert.equal(model.blocks[0]!.align, undefined, "undo removes attrs entirely");
+  assert.equal(model.blocks[0]!.spacing, undefined);
+  assert.equal(model.blocks[0]!.pageBreakBefore, undefined);
+  // setting back to default emits nothing / normalizes away
+  log.begin(null);
+  setBlockAttr(model, r, "align", "left", log);
+  log.flush();
+  assert.equal(model.blocks[0]!.align, undefined, "left is the default, stored as absent");
+});
+
+test("normalize: runs with different props never coalesce; identical ones do", () => {
+  const model = fr();
+  model.blocks[0]!.runs = [
+    { text: "a", marks: [], size: 24 },
+    { text: "b", marks: [], size: 24 },
+    { text: "c", marks: [] },
+  ];
+  validateModel(model);
+  const { normalizeModel } = require("../src/model") as typeof import("../src/model");
+  normalizeModel(model);
+  assert.equal(model.blocks[0]!.runs.length, 2, "same-prop runs coalesced, plain run kept apart");
+  assert.equal(model.blocks[0]!.runs[0]!.text, "ab");
+});

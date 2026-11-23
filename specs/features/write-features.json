@@ -902,5 +902,99 @@
     "verification": "unit + independent pypdf parse + jsdom smoke; not independently reviewed",
     "baseline": "Word strikethrough",
     "offlineSupport": true
+  },
+  {
+    "id": "WRITE-RUNPROPS-001",
+    "name": "Character formatting: size, color, highlight, font family, links",
+    "application": "write",
+    "description": "TextRun carries optional size/color/highlight/font/link. setRunProps splits runs at selection boundaries and emits invertible replace-runs primitives (journal/OT/undo for free). Rendered inline; DOCX round-trips (w:sz, w:color, w:highlight palette, w:rFonts, w:hyperlink with external rels); HTML styled spans + <a>; Markdown [text](url) with a loss warning for visual props; PDF renders at block defaults with a PDF-RUNPROPS warning.",
+    "status": "tested",
+    "owner": "ai",
+    "priority": "P1",
+    "dependencies": [],
+    "commands": [
+      "setRunProps",
+      "runPropsAt"
+    ],
+    "acceptance": [
+      "props survive split/merge/normalize (cloneRun everywhere)",
+      "runs with different props never coalesce; validator updated",
+      "DOCX round-trip keeps all five props",
+      "undo of a prop application is byte-stable",
+      "toolbar selects sync from the caret"
+    ],
+    "edgeCases": [
+      "change handlers capture the control value before toolbar sync resets it",
+      "element-node (triple-click) selection points map to block start/end",
+      "typing after styled text does not inherit props (known gap)"
+    ],
+    "knownLimitations": [
+      "PDF renders per-run size/color/font at block defaults (warned)",
+      "caret-mode prop application not supported \u2014 selection required",
+      "highlight limited to the 8-name Word palette"
+    ],
+    "evidence": "docx/operations test suites; scripts/smoke-write.mjs scenario 10",
+    "verification": "unit + jsdom smoke; not independently reviewed",
+    "baseline": "Word character formatting (subset)",
+    "offlineSupport": true
+  },
+  {
+    "id": "WRITE-BLOCKATTRS-001",
+    "name": "Paragraph alignment, line spacing, page breaks",
+    "application": "write",
+    "description": "Blocks carry align/spacing/pageBreakBefore via a new invertible set-block-attr primitive with full OT transforms (index mapping on split/merge, same-key divergence conflicts). Ribbon align buttons + spacing select + Page Break and Cover Page under Insert. DOCX w:jc/w:spacing/w:pageBreakBefore both ways; HTML styles; PDF honors all three (pypdf-verified 2-page break, shifted Td for center/right).",
+    "status": "tested",
+    "owner": "ai",
+    "priority": "P1",
+    "dependencies": [],
+    "commands": [
+      "setBlockAttr"
+    ],
+    "acceptance": [
+      "attrs set+invert cleanly; defaults normalize to absent",
+      "DOCX round-trip",
+      "PDF: alignment shifts x, page break makes 2 pages, 2.0 spacing lowers last line",
+      "transform matrix extended (all prior OT tests green)"
+    ],
+    "edgeCases": [
+      "left/1.0 normalize to absent so hashes and diffs stay stable",
+      "contentHash includes attrs only when present (old preserved-docx hashes stay valid)"
+    ],
+    "knownLimitations": [
+      "no justify",
+      "editor does not paginate \u2014 breaks show as a dashed rule, honored in PDF/DOCX"
+    ],
+    "evidence": "operations/pdf/docx test suites; pypdf cross-validation; smoke scenario 10",
+    "verification": "unit + independent pypdf parse + jsdom smoke; not independently reviewed",
+    "baseline": "Word paragraph formatting (subset)",
+    "offlineSupport": true
+  },
+  {
+    "id": "WRITE-EDITING-TOOLS-001",
+    "name": "Ribbon editing tools: symbols, word count, spell toggle, cover page, cut/copy",
+    "application": "write",
+    "description": "Insert > Symbol picker (20 common glyphs through the normal journaled insert path), Review > Word Count (words/chars/paragraphs) and Spelling toggle (browser engine), Insert > Cover Page (journaled title/subtitle/page-break scaffold, single undo), Home > Cut/Copy via execCommand with deleteByCut handled in the model.",
+    "status": "tested",
+    "owner": "ai",
+    "priority": "P2",
+    "dependencies": [],
+    "commands": [],
+    "acceptance": [
+      "symbol insert is journaled",
+      "word count alert correct",
+      "cover page is one transaction",
+      "cut deletes through the model path"
+    ],
+    "edgeCases": [
+      "Paste button stays a placeholder (browser clipboard-read permissions)"
+    ],
+    "knownLimitations": [
+      "spell check is the browser's, not a custom engine",
+      "no grammar"
+    ],
+    "evidence": "scripts/smoke-write.mjs scenarios 9-10",
+    "verification": "jsdom smoke; not independently reviewed",
+    "baseline": "Word editing conveniences (subset)",
+    "offlineSupport": true
   }
 ]

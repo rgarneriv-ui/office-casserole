@@ -12,7 +12,7 @@
  */
 
 import { Block, BlockType, DocModel, TableStyle, TextRun } from "./types";
-import { normalizeBlock, normalizeModel, splitRunsAt } from "./model";
+import { cloneRun, normalizeBlock, normalizeModel, splitRunsAt } from "./model";
 
 export type PrimOp =
   | {
@@ -66,6 +66,13 @@ export type PrimOp =
       /** runs the block held before becoming a table (for exact inversion) */
       beforeRuns: TextRun[];
     }
+  | {
+      t: "set-block-attr";
+      block: number;
+      key: "align" | "spacing" | "pageBreakBefore";
+      before: unknown;
+      after: unknown;
+    }
   | { t: "replace-model"; before: DocModel; after: DocModel };
 
 export interface OpRecorder {
@@ -77,7 +84,7 @@ function runsText(runs: TextRun[]): number {
 }
 
 function cloneRuns(runs: TextRun[]): TextRun[] {
-  return runs.map((r) => ({ text: r.text, marks: [...r.marks] }));
+  return runs.map((r) => cloneRun(r));
 }
 
 function cloneModel(model: DocModel): DocModel {
@@ -127,6 +134,16 @@ export function applyOp(model: DocModel, op: PrimOp): void {
         block.indent = op.afterIndent;
       } else {
         delete block.indent;
+      }
+      break;
+    }
+    case "set-block-attr": {
+      const block = model.blocks[op.block];
+      if (!block) throw new Error(`applyOp: no block ${op.block}`);
+      if (op.after === undefined || op.after === null || op.after === false) {
+        delete (block as unknown as Record<string, unknown>)[op.key];
+      } else {
+        (block as unknown as Record<string, unknown>)[op.key] = op.after;
       }
       break;
     }
@@ -200,6 +217,8 @@ export function invertOp(op: PrimOp): PrimOp {
       if (op.beforeIndent !== undefined) inv.afterIndent = op.beforeIndent;
       return inv;
     }
+    case "set-block-attr":
+      return { t: "set-block-attr", block: op.block, key: op.key, before: op.after, after: op.before };
     case "set-table": {
       const inv: PrimOp = {
         t: "set-table",

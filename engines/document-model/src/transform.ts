@@ -60,6 +60,8 @@ export function transformOp(b: PrimOp, a: PrimOp, bias: Bias): TransformResult {
       return transformST(b, a);
     case "set-table":
       return transformTB(b, a);
+    case "set-block-attr":
+      return transformSA(b, a);
   }
 }
 
@@ -68,6 +70,37 @@ type SP = Extract<PrimOp, { t: "split-block" }>;
 type MG = Extract<PrimOp, { t: "merge-blocks" }>;
 type ST = Extract<PrimOp, { t: "set-block-type" }>;
 type TB = Extract<PrimOp, { t: "set-table" }>;
+type SA = Extract<PrimOp, { t: "set-block-attr" }>;
+
+/** set-block-attr never shifts indices or text; only index mapping and
+ *  same-block-same-key divergence matter. */
+function transformSA(b: SA, a: Exclude<PrimOp, { t: "replace-model" }>): TransformResult {
+  switch (a.t) {
+    case "replace-runs":
+      return ok(b); // text edits and block attrs commute
+    case "split-block":
+      if (b.block > a.block) return ok({ ...b, block: b.block + 1 });
+      return ok(b); // the attr stays on the first half
+    case "merge-blocks":
+      if (b.block === a.block) {
+        return conflict(`block ${b.block} had an attribute set and was concurrently merged away`);
+      }
+      if (b.block > a.block) return ok({ ...b, block: b.block - 1 });
+      return ok(b);
+    case "set-block-type":
+      return ok(b); // type and attrs are independent fields
+    case "set-table":
+      if (a.block === b.block) {
+        return conflict(`block ${b.block} had an attribute set and was concurrently table-converted`);
+      }
+      return ok(b);
+    case "set-block-attr":
+      if (a.block === b.block && a.key === b.key && JSON.stringify(a.after) !== JSON.stringify(b.after)) {
+        return conflict(`block ${b.block} received diverging ${b.key} values`);
+      }
+      return ok(b);
+  }
+}
 
 function transformTB(b: TB, a: Exclude<PrimOp, { t: "replace-model" }>): TransformResult {
   switch (a.t) {
@@ -93,6 +126,8 @@ function transformTB(b: TB, a: Exclude<PrimOp, { t: "replace-model" }>): Transfo
           : conflict(`block ${b.block} received diverging table conversions`);
       }
       return ok(b);
+    case "set-block-attr":
+      return ok(b); // attrs never affect table identity or indices
   }
 }
 
@@ -151,6 +186,8 @@ function transformRR(b: RR, a: Exclude<PrimOp, { t: "replace-model" }>, bias: Bi
     case "set-table":
       if (a.block === b.block) return conflict(`block ${b.block} was concurrently converted to/from a table`);
       return ok(b);
+    case "set-block-attr":
+      return ok(b); // block attrs never shift text or indices
   }
 }
 
@@ -189,6 +226,8 @@ function transformSP(b: SP, a: Exclude<PrimOp, { t: "replace-model" }>): Transfo
     case "set-table":
       if (a.block === b.block) return conflict(`block ${b.block} was concurrently converted to/from a table`);
       return ok(b);
+    case "set-block-attr":
+      return ok(b); // block attrs never shift text or indices
   }
 }
 
@@ -233,6 +272,8 @@ function transformMG(b: MG, a: Exclude<PrimOp, { t: "replace-model" }>): Transfo
       if (a.block === b.block || a.block === b.block - 1)
         return conflict(`merge touches block ${a.block}, concurrently converted to/from a table`);
       return ok(b);
+    case "set-block-attr":
+      return ok(b); // block attrs never shift text or indices
   }
 }
 
@@ -262,6 +303,8 @@ function transformST(b: ST, a: Exclude<PrimOp, { t: "replace-model" }>): Transfo
     case "set-table":
       if (a.block === b.block) return conflict(`block ${b.block} was concurrently converted to/from a table`);
       return ok(b);
+    case "set-block-attr":
+      return ok(b); // block attrs never shift text or indices
   }
 }
 

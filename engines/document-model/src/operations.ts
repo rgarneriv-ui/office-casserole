@@ -13,10 +13,12 @@ import {
   DocRange,
   Mark,
   Position,
+  RunProps,
   TextRun,
 } from "./types";
 import {
   blockText,
+  cloneRun,
   newId,
   normRange,
   runsSlice,
@@ -212,7 +214,7 @@ function mapMarksOp(
 ): PrimOp | null {
   if (to <= from) return null;
   const before = runsSlice(block.runs, from, to);
-  const after: TextRun[] = before.map((r) => ({ text: r.text, marks: sortMarks(fn(r.marks)) }));
+  const after: TextRun[] = before.map((r) => { const c = cloneRun(r); c.marks = sortMarks(fn(r.marks)); return c; });
   return { t: "replace-runs", block: blockIndex, from, to, before, after };
 }
 
@@ -295,7 +297,7 @@ function tableOp(
     afterType,
     beforeTable: block.table ? block.table.map((r) => [...r]) : null,
     afterTable,
-    beforeRuns: block.runs.map((r) => ({ text: r.text, marks: [...r.marks] })),
+    beforeRuns: block.runs.map((r) => cloneRun(r)),
   };
   const before = cloneStyle(block.tableStyle);
   const after = afterTable === null ? null : afterStyle !== undefined ? afterStyle : before;
@@ -489,4 +491,74 @@ export function replaceAll(
     replaceMatch(model, matches[i]!, replacement, rec);
   }
   return matches.length;
+}
+
+// ---------- run properties + block attributes (WO-42A) ----------
+
+export type RunPropPatch = Partial<Record<keyof RunProps, string | number | null>>;
+
+/** Apply character properties (size, color, highlight, font, link) to a
+ *  range. Splits runs at the boundaries; each changed block is one
+ *  invertible replace-runs primitive. `null` clears a property. */
+export function setRunProps(
+  model: DocModel,
+  range: DocRange,
+  patch: RunPropPatch,
+  rec?: OpRecorder
+): void {
+  const { start, end } = normRange(range);
+  for (let b = start.block; b <= end.block; b++) {
+    const block = model.blocks[b];
+    if (!block || block.type === "table") continue;
+    const from = b === start.block ? start.offset : 0;
+    const to = b === end.block ? end.offset : blockText(block).length;
+    if (from >= to) continue;
+    const before = runsSlice(block.runs, from, to);
+    const after = before.map((r) => {
+      const next = { ...r, marks: [...r.marks] } as TextRun;
+      for (const [k, v] of Object.entries(patch)) {
+        if (v === null || v === undefined) delete (next as unknown as Record<string, unknown>)[k];
+        else (next as unknown as Record<string, unknown>)[k] = v;
+      }
+      return next;
+    });
+    emit(model, { t: "replace-runs", block: b, from, to, before, after }, rec);
+  }
+}
+
+/** The run properties in force just before `offset` (toolbar sync). */
+export function runPropsAt(block: Block, offset: number): RunProps {
+  let consumed = 0;
+  for (const run of block.runs) {
+    const end = consumed + run.text.length;
+    if (offset <= end && offset > consumed) {
+      const { size, color, highlight, font, link } = run;
+      return { size, color, highlight, font, link };
+    }
+    consumed = end;
+  }
+  const r = offset === 0 ? block.runs[0] : block.runs[block.runs.length - 1];
+  if (!r) return {};
+  const { size, color, highlight, font, link } = r;
+  return { size, color, highlight, font, link };
+}
+
+/** Set a block attribute (align / spacing / pageBreakBefore) over the blocks
+ *  a range touches. One invertible set-block-attr primitive per block. */
+export function setBlockAttr(
+  model: DocModel,
+  range: DocRange,
+  key: "align" | "spacing" | "pageBreakBefore",
+  value: unknown,
+  rec?: OpRecorder
+): void {
+  const { start, end } = normRange(range);
+  for (let b = start.block; b <= end.block; b++) {
+    const block = model.blocks[b];
+    if (!block) continue;
+    const before = (block as unknown as Record<string, unknown>)[key];
+    const normalized = value === "left" && key === "align" ? undefined : value === 1 && key === "spacing" ? undefined : value || undefined;
+    if (before === normalized) continue;
+    emit(model, { t: "set-block-attr", block: b, key, before, after: normalized ?? null }, rec);
+  }
 }

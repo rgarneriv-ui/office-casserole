@@ -298,6 +298,18 @@ export function exportPdf(
       y -= BODY_SIZE;
       return;
     }
+    if (block.pageBreakBefore && page.length > 0) {
+      pages.push(page);
+      page = [];
+      y = PAGE_H - MARGIN;
+    }
+    if (block.runs.some((r) => r.size || r.color || r.highlight || r.font || r.link)) {
+      warnings.push({
+        code: "PDF-RUNPROPS",
+        message: "Per-run font size/color/highlight/family/links render at block defaults in PDF (not yet supported).",
+        blockIndex: bi,
+      });
+    }
     const isList = block.type === "bullet" || block.type === "numbered";
     const level = isList ? Math.min(3, block.indent ?? 0) : 0;
     const marker = listCounter.next(block.type, level);
@@ -315,7 +327,7 @@ export function exportPdf(
         : [{ text: "", font: forceBold ? "B" : "R", underline: false }];
     const indent = isList ? LIST_INDENT * (level + 1) : 0;
     const lines = wrapBlock(spans, size, maxWidth - indent, family);
-    const lineH = size * LINE_FACTOR;
+    const lineH = size * LINE_FACTOR * (block.spacing && block.spacing > 0 ? block.spacing : 1);
     const spaceBefore = isList || block.type === "paragraph" ? 0 : size * 0.6;
     // WinAnsi-safe per-level glyphs (base-14 fonts, no subsetting)
     const prefix =
@@ -329,7 +341,13 @@ export function exportPdf(
         y = PAGE_H - MARGIN;
       }
       y -= lineH;
-      page.push({ kind: "text", line, y, x: MARGIN + indent, prefix: li === 0 ? prefix : null });
+      let x = MARGIN + indent;
+      if (block.align === "center" || block.align === "right") {
+        const lineW = line.spans.reduce((wsum, sp) => wsum + measureText(sp.text, sp.font, line.size, family), 0);
+        const free = Math.max(0, maxWidth - indent - lineW);
+        x += block.align === "center" ? free / 2 : free;
+      }
+      page.push({ kind: "text", line, y, x, prefix: li === 0 ? prefix : null });
     });
     y -= BODY_SIZE * 0.5; // paragraph spacing
   });

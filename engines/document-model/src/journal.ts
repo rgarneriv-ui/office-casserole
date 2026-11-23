@@ -105,6 +105,12 @@ export function validatePrimOp(op: unknown): string[] {
           errors.push(`set-block-type: bad ${k}`);
       }
       break;
+    case "set-block-attr": {
+      if (!Number.isInteger(o.block)) errors.push("set-block-attr: bad block");
+      if (!["align", "spacing", "pageBreakBefore"].includes(o.key as string))
+        errors.push("set-block-attr: bad key");
+      break;
+    }
     case "replace-model": {
       for (const side of ["before", "after"] as const) {
         const m = o[side] as DocModel | undefined;

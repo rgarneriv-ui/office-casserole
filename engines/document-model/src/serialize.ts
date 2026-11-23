@@ -4,7 +4,7 @@
  * fidelity; §5.2 "must not claim complete fidelity").
  */
 
-import { DocModel, SCHEMA_VERSION } from "./types";
+import { Block, DocModel, SCHEMA_VERSION } from "./types";
 import { normalizeModel, validateModel } from "./model";
 import { ListCounter } from "./listmarks";
 
@@ -37,6 +37,30 @@ export function fromJSON(json: string): DocModel {
   return parsed;
 }
 
+/** Word highlight palette → CSS colors (same mapping as the DOCX converter). */
+export const HIGHLIGHT_CSS: Record<string, string> = {
+  yellow: "#ffff00",
+  green: "#00ff00",
+  cyan: "#00ffff",
+  magenta: "#ff00ff",
+  red: "#ff0000",
+  blue: "#0000ff",
+  darkYellow: "#808000",
+  lightGray: "#c0c0c0",
+};
+
+function escapeAttr(text: string): string {
+  return escapeHtml(text);
+}
+
+function blockStyleAttr(block: Block): string {
+  const styles: string[] = [];
+  if (block.align && block.align !== "left") styles.push(`text-align:${block.align}`);
+  if (block.spacing && block.spacing !== 1) styles.push(`line-height:${block.spacing * 1.45}`);
+  if (block.pageBreakBefore) styles.push("page-break-before:always");
+  return styles.length > 0 ? ` style="${styles.join(";")}"` : "";
+}
+
 function escapeHtml(text: string): string {
   return text
     .replace(/&/g, "&amp;")
@@ -51,7 +75,7 @@ const HTML_TAG: Record<string, string> = {
   heading2: "h2",
 };
 
-function runsHtml(block: { runs: { text: string; marks: string[] }[] }): string {
+function runsHtml(block: Pick<Block, "runs">): string {
   return (
     block.runs
       .map((run) => {
@@ -60,6 +84,13 @@ function runsHtml(block: { runs: { text: string; marks: string[] }[] }): string 
         if (run.marks.includes("italic")) html = `<em>${html}</em>`;
         if (run.marks.includes("underline")) html = `<u>${html}</u>`;
         if (run.marks.includes("strike")) html = `<s>${html}</s>`;
+        const styles: string[] = [];
+        if (run.size) styles.push(`font-size:${run.size}pt`);
+        if (run.color) styles.push(`color:${run.color}`);
+        if (run.highlight) styles.push(`background:${HIGHLIGHT_CSS[run.highlight] ?? run.highlight}`);
+        if (run.font) styles.push(`font-family:'${run.font}'`);
+        if (styles.length > 0) html = `<span style="${styles.join(";")}">${html}</span>`;
+        if (run.link) html = `<a href="${escapeAttr(run.link)}">${html}</a>`;
         return html;
       })
       .join("") || "<br>"
@@ -131,7 +162,7 @@ export function toHTML(model: DocModel): string {
     }
     closeAll();
     const tag = HTML_TAG[block.type] ?? "p";
-    parts.push(`<${tag}>${runsHtml(block)}</${tag}>`);
+    parts.push(`<${tag}${blockStyleAttr(block)}>${runsHtml(block)}</${tag}>`);
   }
   closeAll();
   return parts.join("\n");
@@ -188,6 +219,14 @@ export function toMarkdown(model: DocModel): { markdown: string; report: LossRep
         if (run.marks.includes("bold")) md = `**${md}**`;
         if (run.marks.includes("italic")) md = `*${md}*`;
         if (run.marks.includes("strike")) md = `~~${md}~~`; // GFM strikethrough
+        if (run.link) md = `[${md}](${run.link})`;
+        if (run.size || run.color || run.highlight || run.font) {
+          warnings.push({
+            code: "MD-RUNPROPS-LOST",
+            message: "Font size/color/highlight/family have no Markdown representation; exported as plain text.",
+            blockIndex: bi,
+          });
+        }
         if (run.marks.includes("underline")) {
           warnings.push({
             code: "MD-UNDERLINE-LOST",

@@ -9,6 +9,7 @@
 
 import { Block, BlockType, DocModel, Mark, SCHEMA_VERSION } from "../../document-model/src/types";
 import { contentHash, newBlock, normalizeModel, validateModel } from "../../document-model/src/model";
+import type { TextRun } from "../../document-model/src/types";
 import { LossReport, LossWarning } from "../../document-model/src/serialize";
 import { ZipEntry, zipRead, zipWrite } from "./zip";
 
@@ -39,17 +40,31 @@ const STYLE_ID: Record<BlockType, string | null> = {
 /** numId 1 = bullet list, numId 2 = decimal list (see NUMBERING_XML). */
 const NUM_ID: Partial<Record<BlockType, number>> = { bullet: 1, numbered: 2 };
 
-function runXml(text: string, marks: Mark[]): string {
+function runXml(run: TextRun): string {
+  const { text, marks } = run;
   const props: string[] = [];
+  if (run.font) props.push(`<w:rFonts w:ascii="${xmlEscape(run.font)}" w:hAnsi="${xmlEscape(run.font)}"/>`);
   if (marks.includes("bold")) props.push("<w:b/>");
   if (marks.includes("italic")) props.push("<w:i/>");
   if (marks.includes("underline")) props.push('<w:u w:val="single"/>');
   if (marks.includes("strike")) props.push("<w:strike/>");
+  if (run.color) props.push(`<w:color w:val="${run.color.replace("#", "").toUpperCase()}"/>`);
+  if (run.size) props.push(`<w:sz w:val="${Math.round(run.size * 2)}"/><w:szCs w:val="${Math.round(run.size * 2)}"/>`);
+  if (run.highlight && HIGHLIGHT_NAMES.has(run.highlight)) props.push(`<w:highlight w:val="${run.highlight}"/>`);
   const rPr = props.length ? `<w:rPr>${props.join("")}</w:rPr>` : "";
   return `<w:r>${rPr}<w:t xml:space="preserve">${xmlEscape(text)}</w:t></w:r>`;
 }
 
-function paragraphXml(block: Block): string {
+const HIGHLIGHT_NAMES = new Set([
+  "yellow", "green", "cyan", "magenta", "red", "blue", "darkYellow", "lightGray",
+]);
+
+export interface LinkRel {
+  id: string;
+  target: string;
+}
+
+function paragraphXml(block: Block, links?: LinkRel[]): string {
   const styleId = STYLE_ID[block.type];
   const numId = NUM_ID[block.type];
   const props: string[] = [];
@@ -59,8 +74,24 @@ function paragraphXml(block: Block): string {
     props.push(`<w:pStyle w:val="ListParagraph"/>`);
     props.push(`<w:numPr><w:ilvl w:val="${ilvl}"/><w:numId w:val="${numId}"/></w:numPr>`);
   }
+  if (block.pageBreakBefore) props.push("<w:pageBreakBefore/>");
+  if (block.spacing && block.spacing !== 1) {
+    props.push(`<w:spacing w:line="${Math.round(block.spacing * 240)}" w:lineRule="auto"/>`);
+  }
+  if (block.align && block.align !== "left") props.push(`<w:jc w:val="${block.align}"/>`);
   const pPr = props.length ? `<w:pPr>${props.join("")}</w:pPr>` : "";
-  const runs = block.runs.map((r) => runXml(r.text, r.marks)).join("");
+  const runs = block.runs
+    .map((r) => {
+      const xml = runXml(r);
+      if (r.link && links) {
+        const existing = links.find((l) => l.target === r.link);
+        const rel = existing ?? { id: `rIdLink${links.length + 1}`, target: r.link };
+        if (!existing) links.push(rel);
+        return `<w:hyperlink r:id="${rel.id}">${xml}</w:hyperlink>`;
+      }
+      return xml;
+    })
+    .join("");
   return `<w:p>${pPr}${runs}</w:p>`;
 }
 
@@ -137,10 +168,12 @@ function tableXml(table: string[][], style: import("../../document-model/src/typ
   return `<w:tbl><w:tblPr>${borders}</w:tblPr>${grid}${rows}</w:tbl>`;
 }
 
-function documentXml(model: DocModel, warnings: LossWarning[]): string {
+const R_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+
+function documentXml(model: DocModel, warnings: LossWarning[], links: LinkRel[]): string {
   return (
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n` +
-    `<w:document xmlns:w="${W_NS}"><w:body>` +
+    `<w:document xmlns:w="${W_NS}" xmlns:r="${R_NS}"><w:body>` +
     model.blocks
       .map((b, bi) => {
         if (b.foreignDocx) {
@@ -153,7 +186,7 @@ function documentXml(model: DocModel, warnings: LossWarning[]): string {
             blockIndex: bi,
           });
         }
-        return b.type === "table" && b.table ? tableXml(b.table, b.tableStyle) : paragraphXml(b);
+        return b.type === "table" && b.table ? tableXml(b.table, b.tableStyle) : paragraphXml(b, links);
       })
       .join("") +
     `<w:sectPr/></w:body></w:document>`
@@ -250,11 +283,20 @@ export async function exportDocx(
   const styles = byName.get("word/styles.xml");
 
   const warnings: LossWarning[] = [];
+  const links: LinkRel[] = [];
+  const docXmlStr = documentXml(model, warnings, links);
+  let docRelsFinal = docRels;
+  for (const l of links) {
+    docRelsFinal = docRelsFinal.replace(
+      "</Relationships>",
+      `<Relationship Id="${l.id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink" Target="${xmlEscape(l.target)}" TargetMode="External"/></Relationships>`
+    );
+  }
   const entries: ZipEntry[] = [
     { name: "[Content_Types].xml", data: textEncoder.encode(contentTypes) },
     { name: "_rels/.rels", data: textEncoder.encode(ROOT_RELS) },
-    { name: "word/document.xml", data: textEncoder.encode(documentXml(model, warnings)) },
-    { name: "word/_rels/document.xml.rels", data: textEncoder.encode(docRels) },
+    { name: "word/document.xml", data: textEncoder.encode(docXmlStr) },
+    { name: "word/_rels/document.xml.rels", data: textEncoder.encode(docRelsFinal) },
     { name: "word/styles.xml", data: styles ? styles.data : textEncoder.encode(stylesXml()) },
     { name: "word/numbering.xml", data: textEncoder.encode(NUMBERING_XML) },
   ];
@@ -355,6 +397,20 @@ export async function importDocx(
     .filter((e) => !OWNED_PARTS.has(e.name))
     .map((e) => ({ name: e.name, data: e.data }));
 
+  // hyperlink targets: rId -> external URL
+  const linkTargets = new Map<string, string>();
+  const relsEntry = entries.find((e) => e.name === "word/_rels/document.xml.rels");
+  if (relsEntry) {
+    const relsDom = parseXml(textDecoder.decode(relsEntry.data));
+    for (const rel of Array.from(relsDom.getElementsByTagName("Relationship"))) {
+      if ((rel.getAttribute("Type") ?? "").endsWith("/hyperlink")) {
+        const id = rel.getAttribute("Id");
+        const target = rel.getAttribute("Target");
+        if (id && target) linkTargets.set(id, target);
+      }
+    }
+  }
+
   const dom = parseXml(textDecoder.decode(docEntry.data));
   const body = dom.getElementsByTagNameNS?.(W_NS, "body")[0] ?? dom.getElementsByTagName("w:body")[0];
   if (!body) throw new Error("Invalid DOCX: no document body");
@@ -453,7 +509,7 @@ export async function importDocx(
       const innerPs = descendantsByLocalName(el, "p");
       if (innerPs.length === 1) {
         // single-paragraph content control: preserve the whole sdt
-        const block = importParagraph(innerPs[0]!, bi, warnings, numFmtById);
+        const block = importParagraph(innerPs[0]!, bi, warnings, numFmtById, undefined, linkTargets);
         block.foreignDocx = { xml: serializeXml(el), hash: "" };
         block.foreignDocx.hash = hashOf(block);
         warnings.push({
@@ -469,7 +525,7 @@ export async function importDocx(
           blockIndex: bi,
         });
         for (const p2 of innerPs) {
-          model.blocks.push(importParagraph(p2, model.blocks.length, warnings, numFmtById, serializeXml));
+          model.blocks.push(importParagraph(p2, model.blocks.length, warnings, numFmtById, serializeXml, linkTargets));
         }
       }
       continue;
@@ -482,7 +538,7 @@ export async function importDocx(
       });
       continue;
     }
-    model.blocks.push(importParagraph(el, bi, warnings, numFmtById, serializeXml));
+    model.blocks.push(importParagraph(el, bi, warnings, numFmtById, serializeXml, linkTargets));
   }
 
   normalizeModel(model);
@@ -504,12 +560,55 @@ function hashOf(block: Block): string {
   return contentHash(block);
 }
 
+const WORD_HIGHLIGHTS = new Set([
+  "yellow", "green", "cyan", "magenta", "red", "blue", "darkYellow", "lightGray",
+]);
+
+function importRunStyle(
+  r: Element,
+  warnings: LossWarning[],
+  blockIndex: number
+): { marks: Mark[]; props: Partial<TextRun> } {
+  const marks: Mark[] = [];
+  const props: Partial<TextRun> = {};
+  const rPr = firstByLocalName(r, "rPr");
+  if (rPr) {
+    for (const prop of Array.from(rPr.children)) {
+      const val = wAttr(prop, "val");
+      const off = val === "0" || val === "false" || val === "none";
+      if (prop.localName === "b" && !off) marks.push("bold");
+      else if (prop.localName === "i" && !off) marks.push("italic");
+      else if (prop.localName === "u" && !off) marks.push("underline");
+      else if (prop.localName === "strike" && !off) marks.push("strike");
+      else if (prop.localName === "sz" && val) {
+        const pt = Number(val) / 2;
+        if (Number.isFinite(pt) && pt > 0) props.size = pt;
+      } else if (prop.localName === "color" && val && val !== "auto") {
+        props.color = `#${val.toLowerCase()}`;
+      } else if (prop.localName === "highlight" && val && WORD_HIGHLIGHTS.has(val)) {
+        props.highlight = val;
+      } else if (prop.localName === "rFonts") {
+        const ascii = wAttr(prop, "ascii");
+        if (ascii) props.font = ascii;
+      } else if (!["szCs", "lang", "noProof", "u", "highlight", "color"].includes(prop.localName)) {
+        warnings.push({
+          code: "DOCX-IMPORT-RUN-PROP",
+          message: `Run property <${prop.localName}> not supported; formatting dropped.`,
+          blockIndex,
+        });
+      }
+    }
+  }
+  return { marks, props };
+}
+
 function importParagraph(
   p: Element,
   blockIndex: number,
   warnings: LossWarning[],
   numFmtById: Map<string, string> = new Map(),
-  serializeXml?: XmlSerialize
+  serializeXml?: XmlSerialize,
+  linkTargets?: Map<string, string>
 ): Block {
   let type: BlockType = "paragraph";
   let pendingIndent = 0;
@@ -562,31 +661,26 @@ function importParagraph(
 
   const block = newBlock(type);
   if ((type === "bullet" || type === "numbered") && pendingIndent > 0) block.indent = pendingIndent;
+  if (pPr) {
+    const jc = firstByLocalName(pPr, "jc");
+    const jcVal = jc ? wAttr(jc, "val") : null;
+    if (jcVal === "center" || jcVal === "right") block.align = jcVal;
+    else if (jcVal === "end") block.align = "right";
+    const spacingEl = firstByLocalName(pPr, "spacing");
+    const lineAttr = spacingEl ? wAttr(spacingEl, "line") : null;
+    if (lineAttr && (wAttr(spacingEl!, "lineRule") ?? "auto") === "auto") {
+      const mult = Math.round((Number(lineAttr) / 240) * 100) / 100;
+      if (Number.isFinite(mult) && mult > 0 && mult !== 1) block.spacing = mult;
+    }
+    if (firstByLocalName(pPr, "pageBreakBefore")) block.pageBreakBefore = true;
+  }
   const foreignKinds = new Set<string>();
   for (const child of Array.from(p.children)) {
     if (child.localName === "r") {
-      const marks: Mark[] = [];
-      const rPr = firstByLocalName(child, "rPr");
-      if (rPr) {
-        for (const prop of Array.from(rPr.children)) {
-          const val = wAttr(prop, "val");
-          const off = val === "0" || val === "false" || val === "none";
-          if (prop.localName === "b" && !off) marks.push("bold");
-          else if (prop.localName === "i" && !off) marks.push("italic");
-          else if (prop.localName === "u" && !off) marks.push("underline");
-          else if (prop.localName === "strike" && !off) marks.push("strike");
-          else if (!["b", "i", "u", "rFonts", "sz", "szCs", "lang", "noProof"].includes(prop.localName)) {
-            warnings.push({
-              code: "DOCX-IMPORT-RUN-PROP",
-              message: `Run property <${prop.localName}> not supported; formatting dropped.`,
-              blockIndex,
-            });
-          }
-        }
-      }
+      const { marks, props } = importRunStyle(child, warnings, blockIndex);
       for (const rc of Array.from(child.children)) {
         if (rc.localName === "t") {
-          block.runs.push({ text: rc.textContent ?? "", marks: [...marks] });
+          block.runs.push({ text: rc.textContent ?? "", marks: [...marks], ...props });
         } else if (rc.localName === "instrText" || rc.localName === "fldChar") {
           foreignKinds.add("field");
         } else if (rc.localName === "commentReference") {
@@ -596,10 +690,23 @@ function importParagraph(
         }
       }
     } else if (child.localName === "hyperlink") {
-      for (const t of descendantsByLocalName(child, "t")) {
-        block.runs.push({ text: t.textContent ?? "", marks: ["underline"] });
+      const rid = child.getAttribute("r:id") ?? child.getAttributeNS(R_NS, "id");
+      const target = rid ? linkTargets?.get(rid) : undefined;
+      for (const inner of descendantsByLocalName(child, "r")) {
+        const { marks, props } = importRunStyle(inner, warnings, blockIndex);
+        for (const t of descendantsByLocalName(inner, "t")) {
+          const run: TextRun = { text: t.textContent ?? "", marks: [...marks], ...props };
+          if (target) run.link = target;
+          block.runs.push(run);
+        }
       }
-      foreignKinds.add("hyperlink");
+      if (!target) {
+        warnings.push({
+          code: "DOCX-IMPORT-HYPERLINK",
+          message: "Hyperlink target could not be resolved; link text kept without the link.",
+          blockIndex,
+        });
+      }
     } else if (child.localName === "fldSimple") {
       for (const t of descendantsByLocalName(child, "t")) {
         block.runs.push({ text: t.textContent ?? "", marks: [] });

@@ -37,6 +37,9 @@ import {
   newDocument,
   normRange,
   rangeHasMark,
+  runPropsAt,
+  setBlockAttr,
+  setRunProps,
   setBlockType,
   setListIndent,
   splitBlock,
@@ -47,6 +50,7 @@ import {
   validateModel,
 } from "../../../engines/document-model/src/index";
 import type { TextMatch } from "../../../engines/document-model/src/index";
+import { HIGHLIGHT_CSS } from "../../../engines/document-model/src/serialize";
 
 import { DocumentStore, StoredRevision, newDocId, openBestStore } from "./store";
 import { diffBlockText, diffModels, diffSummary } from "../../../engines/document-model/src/diff";
@@ -184,6 +188,12 @@ function domPointToPosition(node: Node, domOffset: number): Position | null {
   }
   const blockEl = el as HTMLElement;
   const blockIndex = Number(blockEl.dataset.block);
+  if (node === blockEl || !(node.nodeType === Node.TEXT_NODE)) {
+    // element-node point (e.g. triple-click select): child index 0 = block
+    // start, anything past the children = block end
+    const end = blockText(model.blocks[blockIndex]!).length;
+    return clampPosition(model, { block: blockIndex, offset: domOffset <= 0 ? 0 : end });
+  }
   let offset = 0;
   const walker = document.createTreeWalker(blockEl, NodeFilter.SHOW_TEXT);
   let t: Node | null = walker.nextNode();
@@ -304,14 +314,29 @@ function renderBlock(block: Block, index: number): string {
     block.runs
       .map((run) => {
         let cls = run.marks.map((m) => `m-${m}`).join(" ");
+        if (run.link) cls = (cls ? cls + " " : "") + "m-link";
+        const st: string[] = [];
+        if (run.size) st.push(`font-size:${run.size}pt`);
+        if (run.color) st.push(`color:${run.color}`);
+        if (run.highlight) st.push(`background:${HIGHLIGHT_CSS[run.highlight] ?? ""}`);
+        if (run.font) st.push(`font-family:'${run.font}'`);
+        const style = st.length > 0 ? ` style="${st.join(";")}"` : "";
+        const title = run.link ? ` title="${run.link.replace(/"/g, "&quot;")} (Ctrl/Cmd-click to open)"` : "";
         const text = run.text
           .replace(/&/g, "&amp;")
           .replace(/</g, "&lt;")
           .replace(/>/g, "&gt;");
-        return cls ? `<span class="${cls}">${text}</span>` : `<span>${text}</span>`;
+        return cls || style || title ? `<span${cls ? ` class="${cls}"` : ""}${style}${title}>${text}</span>` : `<span>${text}</span>`;
       })
       .join("") || "<br>";
-  return `<${tag}${listCls} data-block="${index}">${inner}</${tag}>`;
+  const bst: string[] = [];
+  if (block.align && block.align !== "left") bst.push(`text-align:${block.align}`);
+  if (block.spacing && block.spacing !== 1) bst.push(`line-height:${block.spacing * 1.45}`);
+  const bstyle = bst.length > 0 ? ` style="${bst.join(";")}"` : "";
+  const pbCls = block.pageBreakBefore ? ` class="pb-before"` : "";
+  // listCls already carries class+style for list items; non-list blocks take ours
+  if (listCls) return `<${tag}${listCls} data-block="${index}">${inner}</${tag}>`;
+  return `<${tag}${pbCls}${bstyle} data-block="${index}">${inner}</${tag}>`;
 }
 
 function render(): void {
@@ -416,6 +441,21 @@ function updateToolbar(): void {
   });
   const blockSel = document.getElementById("block-type") as HTMLSelectElement | null;
   if (blockSel) blockSel.value = model.blocks[selection.focus.block]?.type ?? "paragraph";
+  const curBlock = model.blocks[selection.focus.block];
+  if (curBlock) {
+    const props = runPropsAt(curBlock, selection.focus.offset);
+    const ff = document.getElementById("font-family") as HTMLSelectElement | null;
+    if (ff) ff.value = props.font ?? "";
+    const fs = document.getElementById("font-size") as HTMLSelectElement | null;
+    if (fs) fs.value = props.size ? String(props.size) : "";
+    const fh = document.getElementById("font-highlight") as HTMLSelectElement | null;
+    if (fh) fh.value = props.highlight ?? "";
+    const ls = document.getElementById("line-spacing") as HTMLSelectElement | null;
+    if (ls) ls.value = curBlock.spacing ? String(curBlock.spacing) : "";
+    for (const [id, val] of [["btn-align-left", "left"], ["btn-align-center", "center"], ["btn-align-right", "right"]] as const) {
+      document.getElementById(id)?.classList.toggle("active", (curBlock.align ?? "left") === val);
+    }
+  }
 }
 
 function updateExplain(): void {
@@ -424,6 +464,8 @@ function updateExplain(): void {
 
 // ---------- command dispatch (§18.2) ----------
 type CommandId =
+  | "setRunProps"
+  | "setBlockAttr"
   | "findReplaceOne"
   | "findReplaceAll"
   | "indentList"
@@ -548,6 +590,19 @@ function dispatch(id: CommandId, payload?: unknown): void {
       setBlockType(model, selection, payload as Block["type"], log);
       break;
     }
+    case "setRunProps": {
+      if (isCollapsed(selection)) {
+        statusEl.textContent = "Select some text first";
+        break;
+      }
+      setRunProps(model, selection, payload as Parameters<typeof setRunProps>[2], log);
+      break;
+    }
+    case "setBlockAttr": {
+      const { key, value } = payload as { key: "align" | "spacing" | "pageBreakBefore"; value: unknown };
+      setBlockAttr(model, selection, key, value, log);
+      break;
+    }
     case "findReplaceOne": {
       const { match, replacement } = payload as { match: TextMatch; replacement: string };
       const caret = replaceMatch(model, match, replacement, log);
@@ -587,6 +642,9 @@ editor.addEventListener("beforeinput", (e: InputEvent) => {
       break;
     case "deleteContentBackward":
       dispatch("deleteBackward");
+      break;
+    case "deleteByCut":
+      if (!isCollapsed(selection)) dispatch("deleteSelection");
       break;
     case "deleteContentForward": {
       const { focus } = selection;
@@ -664,6 +722,109 @@ document.addEventListener("selectionchange", () => {
   });
 });
 document.getElementById("btn-table")?.addEventListener("click", () => dispatch("insertTable"));
+
+// run-prop + block-attr controls (WO-42A)
+function wireRunProp(id: string, key: string, parse: (v: string) => string | number | null): void {
+  const el = document.getElementById(id) as HTMLSelectElement | HTMLInputElement | null;
+  el?.addEventListener("change", () => {
+    const value = el.value; // capture before readSelection's toolbar sync resets the control
+    readSelection();
+    dispatch("setRunProps", { [key]: parse(value) });
+    editor.focus();
+  });
+  el?.addEventListener("mousedown", () => readSelection());
+}
+wireRunProp("font-family", "font", (v) => v || null);
+wireRunProp("font-size", "size", (v) => (v ? Number(v) : null));
+wireRunProp("font-color", "color", (v) => v);
+wireRunProp("font-highlight", "highlight", (v) => v || null);
+for (const [id, val] of [["btn-align-left", "left"], ["btn-align-center", "center"], ["btn-align-right", "right"]] as const) {
+  document.getElementById(id)?.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    readSelection();
+    dispatch("setBlockAttr", { key: "align", value: val });
+  });
+}
+(document.getElementById("line-spacing") as HTMLSelectElement | null)?.addEventListener("change", (e) => {
+  const v = (e.target as HTMLSelectElement).value;
+  if (!v) return;
+  readSelection();
+  dispatch("setBlockAttr", { key: "spacing", value: Number(v) });
+  editor.focus();
+});
+document.getElementById("btn-pagebreak")?.addEventListener("click", () => {
+  readSelection();
+  const cur = model.blocks[selection.focus.block];
+  dispatch("setBlockAttr", { key: "pageBreakBefore", value: !cur?.pageBreakBefore });
+});
+document.getElementById("btn-link")?.addEventListener("click", () => {
+  readSelection();
+  if (isCollapsed(selection)) {
+    statusEl.textContent = "Select the text to link first";
+    return;
+  }
+  const url = window.prompt("Link URL:", "https://");
+  if (url === null) return;
+  dispatch("setRunProps", { link: url.trim() || null });
+});
+(document.getElementById("symbol-pick") as HTMLSelectElement | null)?.addEventListener("change", (e) => {
+  const sel = e.target as HTMLSelectElement;
+  if (!sel.value) return;
+  readSelection();
+  dispatch("insertText", sel.value);
+  sel.value = "";
+  editor.focus();
+});
+document.getElementById("btn-wordcount")?.addEventListener("click", () => {
+  const text = model.blocks.map((b) => blockText(b)).join("\n");
+  const words = (text.match(/\S+/g) ?? []).length;
+  const chars = text.replace(/\n/g, "").length;
+  window.alert(`Words: ${words}\nCharacters: ${chars}\nParagraphs: ${model.blocks.length}`);
+});
+document.getElementById("btn-spellcheck")?.addEventListener("click", () => {
+  const on = editor.spellcheck;
+  editor.spellcheck = !on;
+  document.getElementById("btn-spellcheck")?.classList.toggle("active", !on);
+  statusEl.textContent = `Spell check ${!on ? "on" : "off"}`;
+  editor.focus();
+});
+document.getElementById("btn-coverpage")?.addEventListener("click", () => {
+  // insert title + subtitle + page break at the top
+  log.begin(null);
+  const title = window.prompt("Document title:", (titleEl?.value ?? "") || "Title") ?? "Title";
+  selection = { anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 0 } };
+  splitBlock(model, { block: 0, offset: 0 }, log);
+  splitBlock(model, { block: 0, offset: 0 }, log);
+  setBlockType(model, { anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 0 } }, "heading1", log);
+  insertText(model, { block: 0, offset: 0 }, title, [], log);
+  insertText(model, { block: 1, offset: 0 }, "Subtitle", [], log);
+  setBlockAttr(model, { anchor: { block: 0, offset: 0 }, focus: { block: 1, offset: 0 } }, "align", "center", log);
+  setBlockAttr(model, { anchor: { block: 2, offset: 0 }, focus: { block: 2, offset: 0 } }, "pageBreakBefore", true, log);
+  log.flush();
+  selection = { anchor: { block: 0, offset: 0 }, focus: { block: 0, offset: 0 } };
+  render();
+  scheduleSave();
+});
+for (const [id, cmdName] of [["btn-cut", "cut"], ["btn-copy", "copy"]] as const) {
+  document.getElementById(id)?.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    try {
+      document.execCommand(cmdName);
+      statusEl.textContent = cmdName === "cut" ? "Cut" : "Copied";
+    } catch {
+      statusEl.textContent = "Clipboard unavailable — use the keyboard shortcut";
+    }
+  });
+}
+// ctrl/cmd-click opens links
+editor.addEventListener("click", (e) => {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const span = (e.target as HTMLElement).closest(".m-link") as HTMLElement | null;
+  if (!span) return;
+  const title = span.getAttribute("title") ?? "";
+  const url = title.split(" (")[0];
+  if (url) window.open(url, "_blank", "noopener");
+});
 document.getElementById("block-type")?.addEventListener("change", (e) => {
   dispatch("setBlockType", (e.target as HTMLSelectElement).value);
   editor.focus();
@@ -1563,23 +1724,24 @@ buildRibbon(
           name: "Clipboard",
           controls: [
             { kind: "ph", label: "Paste", icon: "📋", big: true },
-            { kind: "ph", label: "Cut", icon: "✂" },
-            { kind: "ph", label: "Copy", icon: "⿻" },
+            { kind: "move", id: "btn-cut", label: "Cut", icon: "✂" },
+            { kind: "move", id: "btn-copy", label: "Copy", icon: "⿻" },
             { kind: "ph", label: "Format Painter", icon: "🖌" },
           ],
         },
         {
           name: "Font",
           controls: [
-            { kind: "ph", label: "Calibri (Body)" },
-            { kind: "ph", label: "11" },
+            { kind: "move", id: "font-family" },
+            { kind: "move", id: "font-size" },
             { kind: "move", id: "btn-bold" },
             { kind: "move", id: "btn-italic" },
             { kind: "move", id: "btn-underline" },
             { kind: "move", id: "btn-strike" },
             { kind: "ph", label: "x₂" },
             { kind: "ph", label: "x²" },
-            { kind: "ph", label: "A", icon: "🖍" },
+            { kind: "move", id: "font-highlight" },
+            { kind: "move", id: "font-color" },
           ],
         },
         {
@@ -1589,8 +1751,10 @@ buildRibbon(
             { kind: "action", label: "1≡", title: "Numbering", onClick: () => setBlockViaRibbon("numbered") },
             { kind: "action", label: "⇤", title: "Decrease Indent (Shift+Tab)", onClick: () => { readSelection(); dispatch("outdentList"); editor.focus(); } },
             { kind: "action", label: "⇥", title: "Increase Indent (Tab)", onClick: () => { readSelection(); dispatch("indentList"); editor.focus(); } },
-            { kind: "ph", label: "≡", icon: "" },
-            { kind: "ph", label: "Line Spacing" },
+            { kind: "move", id: "btn-align-left" },
+            { kind: "move", id: "btn-align-center" },
+            { kind: "move", id: "btn-align-right" },
+            { kind: "move", id: "line-spacing" },
             { kind: "ph", label: "Borders" },
           ],
         },
@@ -1615,7 +1779,10 @@ buildRibbon(
     {
       name: "Insert",
       groups: [
-        { name: "Pages", controls: [{ kind: "ph", label: "Cover Page", big: true, icon: "📄" }, { kind: "ph", label: "Page Break" }] },
+        { name: "Pages", controls: [
+          { kind: "move", id: "btn-coverpage", label: "Cover\nPage", icon: "▣", big: true },
+          { kind: "move", id: "btn-pagebreak", label: "Page\nBreak", icon: "⤓", big: true },
+        ] },
         { name: "Tables", controls: [{ kind: "move", id: "btn-table", label: "Table", icon: "⊞", big: true, title: "Insert 3×3 table" }] },
         {
           name: "Illustrations",
@@ -1626,15 +1793,18 @@ buildRibbon(
             { kind: "ph", label: "Chart", icon: "📊" },
           ],
         },
-        { name: "Links", controls: [{ kind: "ph", label: "Link", big: true, icon: "🔗" }, { kind: "ph", label: "Bookmark" }] },
+        { name: "Links", controls: [{ kind: "move", id: "btn-link", label: "Link", icon: "🔗", big: true }, { kind: "ph", label: "Bookmark" }] },
         { name: "Header & Footer", controls: [{ kind: "ph", label: "Header" }, { kind: "ph", label: "Footer" }, { kind: "ph", label: "Page Number" }] },
-        { name: "Symbols", controls: [{ kind: "ph", label: "Equation", icon: "π" }, { kind: "ph", label: "Symbol", icon: "Ω" }] },
+        { name: "Symbols", controls: [{ kind: "ph", label: "Equation", icon: "π" }, { kind: "move", id: "symbol-pick" }] },
       ],
     },
     {
       name: "Review",
       groups: [
-        { name: "Proofing", controls: [{ kind: "ph", label: "Spelling &\nGrammar", big: true, icon: "✓" }, { kind: "ph", label: "Word Count" }] },
+        { name: "Proofing", controls: [
+          { kind: "move", id: "btn-spellcheck", label: "Spelling", icon: "✓", big: true },
+          { kind: "move", id: "btn-wordcount", label: "Word\nCount", icon: "№", big: true },
+        ] },
         { name: "Comments", controls: [{ kind: "ph", label: "New\nComment", big: true, icon: "💬" }] },
         {
           name: "Tracking",

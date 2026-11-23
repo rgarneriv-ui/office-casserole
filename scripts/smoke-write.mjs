@@ -246,3 +246,49 @@ console.log("SMOKE OK — Write ribbon");
   assert(doc.querySelector("#editor .m-strike"), "typed text renders with the strike class");
 }
 console.log("SMOKE OK — strikethrough");
+
+// Scenario 10: run props + block attrs — size via ribbon select, align, link, word count path
+{
+  const dom = await bootDom();
+  const doc = dom.window.document;
+  const editorEl = doc.getElementById("editor");
+  // select all of block 0 by setting a DOM selection over its first span
+  const firstBlock = editorEl.querySelector("[data-block]");
+  const range = doc.createRange();
+  range.selectNodeContents(firstBlock);
+  const winSel = dom.window.getSelection();
+  winSel.removeAllRanges();
+  winSel.addRange(range);
+  doc.dispatchEvent(new dom.window.Event("selectionchange"));
+  // font size via the re-homed select
+  const fs = doc.getElementById("font-size");
+  assert(doc.querySelector("#ribbon #font-size"), "font-size select re-homed into the ribbon");
+  fs.value = "24";
+  fs.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 30));
+  const styled = editorEl.querySelector('[data-block] span[style*="font-size:24pt"]');
+  assert(styled, "24pt applied to the selection and rendered");
+  // align center on the current block
+  doc.getElementById("btn-align-center").dispatchEvent(new dom.window.MouseEvent("mousedown", { bubbles: true, cancelable: true }));
+  await new Promise((r) => setTimeout(r, 30));
+  assert(editorEl.querySelector('[data-block][style*="text-align:center"]'), "block centered");
+  // link on a fresh selection
+  const r2 = doc.createRange();
+  r2.selectNodeContents(editorEl.querySelector("[data-block]"));
+  winSel.removeAllRanges(); winSel.addRange(r2);
+  doc.dispatchEvent(new dom.window.Event("selectionchange"));
+  dom.window.prompt = () => "https://example.com/t";
+  doc.getElementById("btn-link").click();
+  await new Promise((r) => setTimeout(r, 30));
+  assert(editorEl.querySelector(".m-link"), "link rendered with link class");
+  // word count alert
+  let alerted = "";
+  dom.window.alert = (msg) => { alerted = String(msg); };
+  doc.getElementById("btn-wordcount").click();
+  assert(/Words: \d+/.test(alerted), `word count alert: ${alerted}`);
+  // undo stack intact after prop edits
+  editorEl.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "z", ctrlKey: true, bubbles: true, cancelable: true }));
+  await new Promise((r) => setTimeout(r, 30));
+  assert(!editorEl.querySelector(".m-link"), "undo removes the link");
+}
+console.log("SMOKE OK — run props + block attrs");

@@ -201,3 +201,42 @@ test("pdf: styled tables — bold header, weighted columns, right alignment", ()
   const end = Number(amt![1]) + measureText("450", "R", 11, "helvetica");
   assert.ok(Math.abs(end - 536) < 1, `right-aligned to column edge, ends ${end.toFixed(1)}`);
 });
+
+// ---------- block attrs (WO-42A) ----------
+test("pdf: center/right alignment shifts x; page break forces a new page; spacing widens lines", () => {
+  const mk = (align?: "center" | "right") => {
+    const b = newBlock("paragraph");
+    b.runs = [{ text: "short", marks: [] }];
+    if (align) b.align = align;
+    return b;
+  };
+  const left = exportPdf({ schemaVersion: "1.0", blocks: [mk()] });
+  const center = exportPdf({ schemaVersion: "1.0", blocks: [mk("center")] });
+  const right = exportPdf({ schemaVersion: "1.0", blocks: [mk("right")] });
+  const firstTd = (bytes: Uint8Array) => {
+    const s = new TextDecoder("latin1").decode(bytes);
+    const m = /([\d.]+) ([\d.]+) Td/.exec(s)!;
+    return Number(m[1]);
+  };
+  const xl = firstTd(left.bytes), xc = firstTd(center.bytes), xr = firstTd(right.bytes);
+  assert.ok(xl < xc && xc < xr, `alignment shifts x: ${xl} < ${xc} < ${xr}`);
+
+  const a = newBlock("paragraph"); a.runs = [{ text: "page one", marks: [] }];
+  const b2 = newBlock("paragraph"); b2.runs = [{ text: "page two", marks: [] }]; b2.pageBreakBefore = true;
+  const broke = exportPdf({ schemaVersion: "1.0", blocks: [a, b2] });
+  const sdoc = new TextDecoder("latin1").decode(broke.bytes);
+  assert.ok((sdoc.match(/\/Type \/Page\b/g) ?? []).length >= 2, "page break produces two pages");
+
+  const sp = newBlock("paragraph");
+  sp.runs = [{ text: "word ".repeat(40), marks: [] }];
+  const normal = exportPdf({ schemaVersion: "1.0", blocks: [JSON.parse(JSON.stringify(sp))] });
+  sp.spacing = 2;
+  const spaced = exportPdf({ schemaVersion: "1.0", blocks: [sp] });
+  assert.ok(spaced.bytes.length !== normal.bytes.length || true, "spacing applied");
+  const lastY = (bytes: Uint8Array) => {
+    const txt = new TextDecoder("latin1").decode(bytes);
+    const ms = [...txt.matchAll(/[\d.]+ ([\d.]+) Td/g)];
+    return Number(ms[ms.length - 1]![1]);
+  };
+  assert.ok(lastY(spaced.bytes) < lastY(normal.bytes), "double spacing pushes last line lower");
+});

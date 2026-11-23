@@ -37,6 +37,23 @@ export function docText(model: DocModel): string {
   return model.blocks.map(blockText).join("\n");
 }
 
+const RUN_PROP_KEYS = ["size", "color", "highlight", "font", "link"] as const;
+
+/** Copy a run (optionally with different text), carrying marks and props. */
+export function cloneRun(run: TextRun, text: string = run.text): TextRun {
+  const out: TextRun = { text, marks: [...run.marks] };
+  for (const k of RUN_PROP_KEYS) {
+    if (run[k] !== undefined) (out as unknown as Record<string, unknown>)[k] = run[k];
+  }
+  return out;
+}
+
+/** Marks AND character props equal (coalescing/equality key). */
+export function runStyleEqual(a: TextRun, b: TextRun): boolean {
+  if (!marksEqual(a.marks, b.marks)) return false;
+  return RUN_PROP_KEYS.every((k) => a[k] === b[k]);
+}
+
 export function marksEqual(a: Mark[], b: Mark[]): boolean {
   if (a.length !== b.length) return false;
   const sa = [...a].sort();
@@ -54,12 +71,13 @@ export function normalizeBlock(block: Block): void {
   const out: TextRun[] = [];
   for (const run of block.runs) {
     if (run.text.length === 0) continue;
-    const marks = sortMarks(run.marks);
     const prev = out[out.length - 1];
-    if (prev && marksEqual(prev.marks, marks)) {
+    if (prev && runStyleEqual(prev, run)) {
       prev.text += run.text;
     } else {
-      out.push({ text: run.text, marks });
+      const c = cloneRun(run);
+      c.marks = sortMarks(c.marks);
+      out.push(c);
     }
   }
   block.runs = out;
@@ -114,7 +132,7 @@ export function validateModel(model: DocModel): string[] {
     for (let j = 1; j < b.runs.length; j++) {
       const a = b.runs[j - 1]!;
       const c = b.runs[j]!;
-      if (marksEqual(a.marks, c.marks)) {
+      if (runStyleEqual(a, c)) {
         errors.push(`block ${i} runs ${j - 1},${j} not merged`);
       }
     }
@@ -154,13 +172,13 @@ export function splitRunsAt(runs: TextRun[], offset: number): [TextRun[], TextRu
     const start = consumed;
     const end = consumed + run.text.length;
     if (end <= offset) {
-      left.push({ text: run.text, marks: [...run.marks] });
+      left.push(cloneRun(run));
     } else if (start >= offset) {
-      right.push({ text: run.text, marks: [...run.marks] });
+      right.push(cloneRun(run));
     } else {
       const cut = offset - start;
-      left.push({ text: run.text.slice(0, cut), marks: [...run.marks] });
-      right.push({ text: run.text.slice(cut), marks: [...run.marks] });
+      left.push(cloneRun(run, run.text.slice(0, cut)));
+      right.push(cloneRun(run, run.text.slice(cut)));
     }
     consumed = end;
   }
@@ -196,6 +214,9 @@ export function contentHash(block: Block): string {
     r: block.runs,
     tb: block.table ?? null,
     ts: block.tableStyle ?? null,
+    ...(block.align ? { al: block.align } : {}),
+    ...(block.spacing ? { sp: block.spacing } : {}),
+    ...(block.pageBreakBefore ? { pb: true } : {}),
   });
   let h = 5381;
   for (let i = 0; i < basis.length; i++) {

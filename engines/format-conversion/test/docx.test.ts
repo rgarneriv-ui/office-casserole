@@ -97,7 +97,7 @@ test("docx: import reports unsupported content instead of claiming fidelity", as
     `<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body>` +
     `<w:p><w:pPr><w:pStyle w:val="Heading3"/></w:pPr><w:r><w:t>Deep heading</w:t></w:r></w:p>` +
     `<w:tbl><w:tr><w:tc><w:p><w:r><w:t>cell text</w:t></w:r></w:p></w:tc></w:tr></w:tbl>` +
-    `<w:p><w:r><w:rPr><w:highlight w:val="yellow"/></w:rPr><w:t>highlighted</w:t></w:r>` +
+    `<w:p><w:r><w:rPr><w:vertAlign w:val="superscript"/></w:rPr><w:t>highlighted</w:t></w:r>` +
     `<w:r><w:drawing/></w:r></w:p>` +
     `<w:sectPr/></w:body></w:document>`;
   const bytes = await zipWrite([
@@ -380,4 +380,32 @@ test("docx: strike mark round-trips", async () => {
   const runs = back.model.blocks[0]!.runs;
   assert.ok(runs.some((r) => r.marks.includes("strike") && r.text === "cut this"));
   assert.ok(runs.some((r) => r.marks.includes("strike") && r.marks.includes("bold")));
+});
+
+// ---------- run props, block attrs, links (WO-42A) ----------
+test("docx: size/color/highlight/font/link and align/spacing/pageBreak round-trip", async () => {
+  const model = sample();
+  const b0 = model.blocks[0]!;
+  b0.runs = [
+    { text: "big red ", marks: ["bold"], size: 18, color: "#cc0000", font: "Georgia" },
+    { text: "marked", marks: [], highlight: "yellow" },
+    { text: " site", marks: [], link: "https://example.com/x" },
+  ];
+  b0.align = "center";
+  b0.spacing = 1.5;
+  model.blocks[1]!.pageBreakBefore = true;
+  const out = await exportDocx(model);
+  const back = await importDocx(out.bytes, parseXml, serializeXml);
+  const r = back.model.blocks[0]!.runs;
+  const big = r.find((x) => x.text.includes("big red"))!;
+  assert.equal(big.size, 18);
+  assert.equal(big.color, "#cc0000");
+  assert.equal(big.font, "Georgia");
+  assert.ok(big.marks.includes("bold"));
+  assert.equal(r.find((x) => x.text === "marked")!.highlight, "yellow");
+  assert.equal(r.find((x) => x.text === " site")!.link, "https://example.com/x");
+  assert.equal(back.model.blocks[0]!.align, "center");
+  assert.equal(back.model.blocks[0]!.spacing, 1.5);
+  assert.equal(back.model.blocks[1]!.pageBreakBefore, true);
+  assert.ok(back.report.warnings.every((w) => w.code !== "DOCX-PRESERVED"), "links are modeled now, not preserved-as-foreign");
 });
